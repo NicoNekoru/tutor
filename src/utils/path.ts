@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import os from 'os';
 
 export async function ensureDir(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
@@ -16,6 +17,18 @@ export async function fileExists(filePath: string): Promise<boolean> {
 
 export function resolveCourseRoot(baseDir: string, courseId: string): string {
   return path.resolve(baseDir, 'courses', courseId);
+}
+
+export function getGlobalConfigDir(): string {
+  return path.join(os.homedir(), '.tutor');
+}
+
+export function getGlobalPaths() {
+  const globalDir = getGlobalConfigDir();
+  return {
+    root: globalDir,
+    tutorConfig: path.join(globalDir, 'tutor.yaml'),
+  };
 }
 
 export function getWorkspacePaths(baseDir: string, courseId?: string) {

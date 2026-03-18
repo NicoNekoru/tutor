@@ -9,7 +9,7 @@ import {
   LessonFrontmatter,
   ConceptFrontmatter,
 } from '../schemas/types';
-import { getWorkspacePaths, ensureDir, fileExists } from '../utils/path';
+import { getWorkspacePaths, getGlobalPaths, ensureDir, fileExists } from '../utils/path';
 
 export class WorkspaceManager {
   private baseDir: string;
@@ -25,7 +25,8 @@ export class WorkspaceManager {
     title: string,
     subject: string,
     tutorConfig: TutorConfig,
-    studentProfile: StudentProfile
+    studentProfile: StudentProfile,
+    options?: { useGlobalPersona?: boolean }
   ): Promise<string> {
     this.paths = getWorkspacePaths(this.baseDir, courseId);
     this.courseRoot = this.paths.root;
@@ -43,6 +44,15 @@ export class WorkspaceManager {
       ensureDir(this.paths.stateDir),
       ensureDir(this.paths.indexDir),
     ]);
+
+    // If --from-global, merge global persona as base with course-specific overrides on top
+    let finalTutorConfig = tutorConfig;
+    if (options?.useGlobalPersona) {
+      const globalConfig = await loadGlobalTutorConfig();
+      if (globalConfig) {
+        finalTutorConfig = mergeTutorConfigs(globalConfig, tutorConfig);
+      }
+    }
 
     // Write manifest
     const manifest: CourseManifest = {
@@ -62,8 +72,8 @@ export class WorkspaceManager {
     };
     await this.writeYAML('manifest.yaml', manifest);
 
-    // Write tutor config
-    await this.writeYAML(path.join('configs', 'tutor.yaml'), tutorConfig);
+    // Write tutor config (course-local, the primary layer)
+    await this.writeYAML(path.join('configs', 'tutor.yaml'), finalTutorConfig);
 
     // Write student profile
     await this.writeYAML(path.join('configs', 'student.yaml'), studentProfile);
@@ -200,4 +210,66 @@ export class WorkspaceManager {
     const filename = `${conceptId}.md`;
     await this.writeMarkdown(path.join('concepts', filename), frontmatter as unknown as Record<string, unknown>, content);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Global persona utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the global tutor persona from ~/.tutor/tutor.yaml.
+ * Returns null if no global persona is configured.
+ */
+export async function loadGlobalTutorConfig(): Promise<TutorConfig | null> {
+  const globalPaths = getGlobalPaths();
+  if (!(await fileExists(globalPaths.tutorConfig))) {
+    return null;
+  }
+  const content = await fs.readFile(globalPaths.tutorConfig, 'utf-8');
+  return yaml.parse(content) as TutorConfig;
+}
+
+/**
+ * Save a tutor persona as the global default in ~/.tutor/tutor.yaml.
+ */
+export async function saveGlobalTutorConfig(config: TutorConfig): Promise<void> {
+  const globalPaths = getGlobalPaths();
+  await ensureDir(globalPaths.root);
+  await fs.writeFile(globalPaths.tutorConfig, yaml.stringify(config), 'utf-8');
+}
+
+/**
+ * Merge two TutorConfig objects. `override` values take precedence;
+ * `base` fills in anything the override doesn't specify. Arrays are
+ * replaced (not concatenated) when the override provides them.
+ */
+export function mergeTutorConfigs(base: TutorConfig, override: Partial<TutorConfig>): TutorConfig {
+  return {
+    name: override.name || base.name,
+    persona: {
+      style: override.persona?.style || base.persona.style,
+      tone: override.persona?.tone || base.persona.tone,
+      role: override.persona?.role || base.persona.role,
+      specialization: override.persona?.specialization?.length
+        ? override.persona.specialization
+        : base.persona.specialization,
+    },
+    pedagogy: {
+      defaultStructure: override.pedagogy?.defaultStructure?.length
+        ? override.pedagogy.defaultStructure
+        : base.pedagogy.defaultStructure,
+      emphasize: override.pedagogy?.emphasize?.length
+        ? override.pedagogy.emphasize
+        : base.pedagogy.emphasize,
+      avoid: override.pedagogy?.avoid?.length
+        ? override.pedagogy.avoid
+        : base.pedagogy.avoid,
+    },
+    adaptationRules: {
+      askDiagnosticQuestions: override.adaptationRules?.askDiagnosticQuestions ?? base.adaptationRules.askDiagnosticQuestions,
+      slowDownOnConfusion: override.adaptationRules?.slowDownOnConfusion ?? base.adaptationRules.slowDownOnConfusion,
+      revisitPrerequisitesIfNeeded: override.adaptationRules?.revisitPrerequisitesIfNeeded ?? base.adaptationRules.revisitPrerequisitesIfNeeded,
+      weaveInMlConnections: override.adaptationRules?.weaveInMlConnections || base.adaptationRules.weaveInMlConnections,
+    },
+  };
 }
