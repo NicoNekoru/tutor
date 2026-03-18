@@ -6,12 +6,12 @@ import { promises as fs } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { WorkspaceManager } from './workspace/WorkspaceManager';
-import { SQLiteDatabase } from './indexer/Database';
+import { IndexStore } from './indexer/IndexStore';
 import { Indexer } from './indexer/Indexer';
 import { RetrievalEngine } from './retrieval/RetrievalEngine';
 import { CLIModelAdapter, ModelBackendConfig } from './adapter/ModelAdapter';
 import { Orchestrator } from './orchestrator/Orchestrator';
-import { TutorTUI } from './tui/TUI';
+import { SimpleCLI } from './tui/SimpleCLI';
 import {
   TutorConfig,
   StudentProfile,
@@ -93,12 +93,13 @@ program
       }
     );
 
-    // Create SQLite index
-    const db = new SQLiteDatabase();
-    await db.initialize();
+    // Create index store
+    const store = new IndexStore();
+    const indexPath = path.join(ws.getPaths().indexDir, 'index.json');
+    await store.initialize(indexPath);
 
     // Index the workspace
-    const indexer = new Indexer(db, ws);
+    const indexer = new Indexer(store, ws);
     await indexer.indexWorkspace(ws.getCourseRoot());
 
     console.log('Course initialized at:', ws.getCourseRoot());
@@ -121,27 +122,29 @@ program
       process.exit(1);
     }
 
-    // Initialize database
-    const db = new SQLiteDatabase();
-    await db.initialize();
+     // Load index store
+     const store = new IndexStore();
+     const indexPath = ws.getPaths().indexDir + '/index.json';
+     await store.initialize(indexPath);
 
-    // Initialize retrieval
-    const retrieval = new RetrievalEngine(db);
+     // Initialize retrieval
+     const retrieval = new RetrievalEngine(store);
 
-    // Initialize model adapter (placeholder config)
-    const modelConfig: ModelBackendConfig = {
-      command: 'opencode', // or another CLI
-      args: ['--json'],
-    };
-    const modelAdapter = CLIModelAdapter(modelConfig);
+     // Initialize model adapter (placeholder config)
+     const modelConfig: ModelBackendConfig = {
+       command: 'opencode', // or another CLI
+       args: ['--json'],
+     };
+     const modelAdapter = CLIModelAdapter(modelConfig);
 
-    // Initialize orchestrator
-    const orchestrator = new Orchestrator(modelAdapter, retrieval, ws, db);
+     // Initialize orchestrator - we need to update Orchestrator to accept store instead of db
+     // For now, create a wrapper or modify Orchestrator - but let's just update Orchestrator
+     const orchestrator = new Orchestrator(modelAdapter, retrieval, ws, store);
     await orchestrator.initializeSession();
 
-    // Start TUI
-    const tui = new TutorTUI(orchestrator, ws);
-    tui.start();
+    // Start CLI
+    const cli = new SimpleCLI(orchestrator);
+    await cli.start();
   });
 
 program
@@ -159,9 +162,10 @@ program
       process.exit(1);
     }
 
-    const dbPath = ws.getPaths().indexDb;
-    const db = new SQLiteDatabase(dbPath);
-    const indexer = new Indexer(db, ws);
+     const store = new IndexStore();
+     const indexPath = ws.getPaths().indexDir + '/index.json';
+     await store.initialize(indexPath);
+     const indexer = new Indexer(store, ws);
 
     console.log('Rebuilding index...');
     await indexer.reindex(ws.getCourseRoot());

@@ -2,7 +2,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
-import { SQLiteDatabase } from './Database';
+import { IndexStore } from './IndexStore';
 import {
   DocumentKind,
   DocumentEntry,
@@ -18,11 +18,11 @@ import {
 } from './ChunkExtractor';
 
 export class Indexer {
-  private db: SQLiteDatabase;
+  private store: IndexStore;
   private ws: WorkspaceManager;
 
-  constructor(db: SQLiteDatabase, ws: WorkspaceManager) {
-    this.db = db;
+  constructor(store: IndexStore, ws: WorkspaceManager) {
+    this.store = store;
     this.ws = ws;
   }
 
@@ -51,6 +51,7 @@ export class Indexer {
         await this.indexFile(workspaceRoot, filePath);
       }
 
+      await this.store.save();
       console.log('Indexing completed successfully');
     } catch (error) {
       console.error('Indexing failed:', error);
@@ -81,22 +82,22 @@ export class Indexer {
     doc.updatedAt = new Date(stats.mtime).toISOString();
 
     // Store document
-    this.db.upsertDocument(doc);
+    this.store.upsertDocument(doc);
 
     // Delete old chunks for this document
-    this.db.deleteChunksByDocumentId(doc.id);
+    this.store.deleteChunksByDocumentId(doc.id);
 
     // Extract and store chunks (for markdown files)
     if (absolutePath.endsWith('.md')) {
       const chunks = extractChunks(doc, content);
 
       for (const chunk of chunks) {
-        this.db.upsertChunk(chunk);
+        this.store.upsertChunk(chunk);
 
         // Extract and store tags from chunk content (simple keyword extraction)
         const tags = this.extractTags(chunk);
         for (const tag of tags) {
-          this.db.addChunkTag(chunk.id, tag);
+          this.store.addChunkTag(chunk.id, tag);
         }
       }
 
@@ -174,7 +175,7 @@ export class Indexer {
 
     if (conceptAttrs.prerequisites) {
       for (const prereq of conceptAttrs.prerequisites) {
-        this.db.upsertConceptEdge({
+        this.store.upsertConceptEdge({
           sourceConceptId: conceptId,
           relation: 'prerequisite',
           targetConceptId: prereq,
@@ -184,7 +185,7 @@ export class Indexer {
 
     if (conceptAttrs.related) {
       for (const related of conceptAttrs.related) {
-        this.db.upsertConceptEdge({
+        this.store.upsertConceptEdge({
           sourceConceptId: conceptId,
           relation: 'related',
           targetConceptId: related,
@@ -196,12 +197,9 @@ export class Indexer {
   async reindex(workspaceRoot: string): Promise<void> {
     // Clear all data and re-index
     console.log('Clearing existing index...');
-    this.db.exec('DELETE FROM chunk_tags');
-    this.db.exec('DELETE FROM concept_edges');
-    this.db.exec('DELETE FROM chunks');
-    this.db.exec('DELETE FROM documents');
-    // Reset autoincrement not needed as we use UUIDs
+    this.store.clearAll();
 
     await this.indexWorkspace(workspaceRoot);
+    await this.store.save();
   }
 }

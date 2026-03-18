@@ -15,7 +15,7 @@ import {
 import { ModelAdapter } from '../adapter/ModelAdapter';
 import { RetrievalEngine } from '../retrieval/RetrievalEngine';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
-import { Database } from '../indexer/Database';
+import { IndexStore } from '../indexer/IndexStore';
 
 // Intent classifier (simple rule-based for now)
 function classifyIntent(message: string): MessageIntent {
@@ -74,7 +74,7 @@ export class Orchestrator {
   private modelAdapter: ModelAdapter;
   private retrieval: RetrievalEngine;
   private ws: WorkspaceManager;
-  private db: Database;
+  private store: IndexStore;
   private tutorContract: TutorContract | null = null;
   private studentProfile: StudentProfile | null = null;
   private courseManifest: CourseManifest | null = null;
@@ -83,12 +83,12 @@ export class Orchestrator {
     modelAdapter: ModelAdapter,
     retrieval: RetrievalEngine,
     ws: WorkspaceManager,
-    db: Database
+    store: IndexStore
   ) {
     this.modelAdapter = modelAdapter;
     this.retrieval = retrieval;
     this.ws = ws;
-    this.db = db;
+    this.store = store;
   }
 
   async initializeSession(): Promise<void> {

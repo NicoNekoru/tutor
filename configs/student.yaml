@@ -1,0 +1,16 @@
+studentId: default
+displayName: Student
+background:
+  mathLevel: unknown
+  priorCourses: []
+  strengths: []
+  weakAreas: []
+preferences:
+  pace: moderate
+  rigor: high
+  examplesBeforeProofs: false
+  exercisesPerLesson: 3
+goals:
+  - Learn combinatorics rigorously
+  - Improve proof-writing
+  - Understand applications
