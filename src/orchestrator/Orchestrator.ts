@@ -207,7 +207,7 @@ export class Orchestrator {
     });
 
     // Log retrieval
-    this.db.logRetrieval({
+    this.store.logRetrieval({
       id: uuidv4(),
       createdAt: new Date().toISOString(),
       query: plan.query,
@@ -335,12 +335,12 @@ ${await this.getSessionTranscript()}
     return '[Transcript not implemented yet]';
   }
 
-  private logEvent(type: string, payload: unknown): void {
-    this.db.logEvent({
-      id: uuidv4(),
-      eventType: type,
-      createdAt: new Date().toISOString(),
-      payloadJson: JSON.stringify(payload),
-    });
-  }
+   private logEvent(type: string, payload: unknown): void {
+     this.store.logEvent({
+       id: uuidv4(),
+       eventType: type,
+       createdAt: new Date().toISOString(),
+       payloadJson: JSON.stringify(payload),
+     });
+   }
 }
