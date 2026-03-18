@@ -36,7 +36,7 @@ export class RetrievalEngine {
       chunkId: r.chunkId,
       documentId: r.documentId,
       path: r.path,
-      score: includeScores ? r.score : undefined,
+      score: r.score,
       chunkKind: r.chunkKind,
       heading: r.heading,
       contentPreview: r.contentPreview,

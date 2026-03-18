@@ -1,23 +1,15 @@
 #!/usr/bin/env bun
 
 import { Command } from 'commander';
-import path from 'path';
-import { promises as fs } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { WorkspaceManager } from './workspace/WorkspaceManager';
 import { SQLiteDatabase } from './indexer/Database';
 import { Indexer } from './indexer/Indexer';
 import { RetrievalEngine } from './retrieval/RetrievalEngine';
-import { CLIModelAdapter, ModelBackendConfig } from './adapter/ModelAdapter';
+import { createModelAdapter, ModelBackendConfig } from './adapter/ModelAdapter';
 import { Orchestrator } from './orchestrator/Orchestrator';
 import { TutorTUI } from './tui/TUI';
-import {
-  TutorConfig,
-  StudentProfile,
-  CourseManifest,
-  Syllabus,
-} from './schemas/types';
 
 const program = new Command();
 const BASE_DIR = process.cwd();
@@ -42,12 +34,12 @@ program
 
     // Create workspace
     const ws = new WorkspaceManager(BASE_DIR);
-    await ws.createCourse(
+    const courseRoot = await ws.createCourse(
       courseId,
       `${subject.charAt(0).toUpperCase() + subject.slice(1)} Private Tutoring`,
       subject,
       {
-        name: `${options.tutorName} ${options.persona}`,
+        name: `${options.tutorName} of ${subject.charAt(0).toUpperCase() + subject.slice(1)}`,
         persona: {
           style: options.persona,
           tone: 'formal but supportive',
@@ -93,22 +85,37 @@ program
       }
     );
 
-    // Create SQLite index
-    const db = new SQLiteDatabase();
+    // Create and persist SQLite index
+    const dbPath = ws.getPaths().indexDb;
+    const db = new SQLiteDatabase(dbPath);
     await db.initialize();
 
     // Index the workspace
     const indexer = new Indexer(db, ws);
-    await indexer.indexWorkspace(ws.getCourseRoot());
+    await indexer.indexWorkspace(courseRoot);
 
-    console.log('Course initialized at:', ws.getCourseRoot());
-    console.log('Now run: tutor start');
+    // Save database
+    await db.save();
+
+    // Log event
+    db.logEvent({
+      id: uuidv4(),
+      eventType: 'course_initialized',
+      createdAt: new Date().toISOString(),
+      payloadJson: JSON.stringify({ courseId, subject }),
+    });
+    await db.save();
+
+    console.log(`Course initialized at: ${courseRoot}`);
+    console.log('Now run: bun src/index.ts start --course-id ' + courseId);
   });
 
 program
   .command('start')
   .description('Start the TUI for an existing course')
   .option('--course-id <id>', 'Course identifier', 'my-course')
+  .option('--model-command <cmd>', 'Model backend CLI command')
+  .option('--model-args <args>', 'Model backend CLI args (comma-separated)')
   .action(async (options) => {
     const courseId = options.courseId;
     const ws = new WorkspaceManager(BASE_DIR);
@@ -122,18 +129,22 @@ program
     }
 
     // Initialize database
-    const db = new SQLiteDatabase();
+    const dbPath = ws.getPaths().indexDb;
+    const db = new SQLiteDatabase(dbPath);
     await db.initialize();
 
     // Initialize retrieval
     const retrieval = new RetrievalEngine(db);
 
-    // Initialize model adapter (placeholder config)
-    const modelConfig: ModelBackendConfig = {
-      command: 'opencode', // or another CLI
-      args: ['--json'],
-    };
-    const modelAdapter = CLIModelAdapter(modelConfig);
+    // Initialize model adapter
+    let modelConfig: ModelBackendConfig | undefined;
+    if (options.modelCommand) {
+      modelConfig = {
+        command: options.modelCommand,
+        args: options.modelArgs ? options.modelArgs.split(',') : [],
+      };
+    }
+    const modelAdapter = createModelAdapter(modelConfig);
 
     // Initialize orchestrator
     const orchestrator = new Orchestrator(modelAdapter, retrieval, ws, db);
@@ -161,10 +172,13 @@ program
 
     const dbPath = ws.getPaths().indexDb;
     const db = new SQLiteDatabase(dbPath);
+    await db.initialize();
+
     const indexer = new Indexer(db, ws);
 
     console.log('Rebuilding index...');
     await indexer.reindex(ws.getCourseRoot());
+    await db.save();
     console.log('Reindex complete');
   });
 

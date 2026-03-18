@@ -2,29 +2,22 @@ import { promises as fs } from 'fs';
 import * as yaml from 'yaml';
 import path from 'path';
 import {
-  v4 as uuidv4,
-} from 'uuid';
-import {
   CourseManifest,
   TutorConfig,
   StudentProfile,
-  Syllabus,
+  MasteryState,
   LessonFrontmatter,
   ConceptFrontmatter,
-  MasteryState,
-  DocumentKind,
 } from '../schemas/types';
 import { getWorkspacePaths, ensureDir, fileExists } from '../utils/path';
 
 export class WorkspaceManager {
   private baseDir: string;
-  private courseRoot: string;
-  private paths: ReturnType<typeof getWorkspacePaths>;
+  private courseRoot: string = '';
+  private paths!: ReturnType<typeof getWorkspacePaths>;
 
   constructor(baseDir: string = process.cwd()) {
     this.baseDir = baseDir;
-    this.courseRoot = '';
-    this.paths = {} as ReturnType<typeof getWorkspacePaths>;
   }
 
   async createCourse(
@@ -34,20 +27,21 @@ export class WorkspaceManager {
     tutorConfig: TutorConfig,
     studentProfile: StudentProfile
   ): Promise<string> {
-    this.courseRoot = getWorkspacePaths(this.baseDir, courseId).root;
+    this.paths = getWorkspacePaths(this.baseDir, courseId);
+    this.courseRoot = this.paths.root;
 
     // Create all required directories
     await Promise.all([
       ensureDir(this.courseRoot),
-      ensureDir(path.join(this.courseRoot, 'configs')),
-      ensureDir(path.join(this.courseRoot, 'lessons')),
-      ensureDir(path.join(this.courseRoot, 'concepts')),
-      ensureDir(path.join(this.courseRoot, 'assignments')),
-      ensureDir(path.join(this.courseRoot, 'logs', 'sessions')),
-      ensureDir(path.join(this.courseRoot, 'logs', 'summaries')),
-      ensureDir(path.join(this.courseRoot, 'transcripts')),
-      ensureDir(path.join(this.courseRoot, 'state')),
-      ensureDir(path.join(this.courseRoot, 'index')),
+      ensureDir(this.paths.configs),
+      ensureDir(this.paths.lessonsDir),
+      ensureDir(this.paths.conceptsDir),
+      ensureDir(this.paths.assignmentsDir),
+      ensureDir(this.paths.sessionLogsDir),
+      ensureDir(this.paths.summariesDir),
+      ensureDir(this.paths.transcriptsDir),
+      ensureDir(this.paths.stateDir),
+      ensureDir(this.paths.indexDir),
     ]);
 
     // Write manifest
@@ -82,16 +76,15 @@ export class WorkspaceManager {
   }
 
   async loadCourse(courseId: string): Promise<boolean> {
-    const paths = getWorkspacePaths(this.baseDir, courseId);
-    this.paths = paths;
-    this.courseRoot = paths.root;
+    this.paths = getWorkspacePaths(this.baseDir, courseId);
+    this.courseRoot = this.paths.root;
 
     // Verify essential files exist
     const requiredFiles = [
-      paths.manifest,
-      paths.tutorConfig,
-      paths.studentConfig,
-      paths.masteryState,
+      this.paths.manifest,
+      this.paths.tutorConfig,
+      this.paths.studentConfig,
+      this.paths.masteryState,
     ];
 
     for (const file of requiredFiles) {
@@ -141,16 +134,16 @@ export class WorkspaceManager {
   }
 
   async writeTranscriptEntry(entry: { role: string; content: string }): Promise<void> {
-    const transcriptDir = path.join(this.courseRoot, 'transcripts');
-    await ensureDir(transcriptDir);
+    await ensureDir(this.paths.transcriptsDir);
 
     const dateStr = new Date().toISOString().split('T')[0];
-    const transcriptFile = path.join(transcriptDir, `${dateStr}.jsonl`);
+    const transcriptFile = path.join(this.paths.transcriptsDir, `${dateStr}.jsonl`);
 
-    const entryLine = JSON.stringify({
-      ...entry,
-      timestamp: new Date().toISOString(),
-    }) + '\n';
+    const entryLine =
+      JSON.stringify({
+        ...entry,
+        timestamp: new Date().toISOString(),
+      }) + '\n';
 
     await fs.appendFile(transcriptFile, entryLine, 'utf-8');
   }
@@ -184,7 +177,7 @@ export class WorkspaceManager {
       objectives: [],
     };
 
-    await this.writeMarkdown(path.join('lessons', filename), frontmatter, content);
+    await this.writeMarkdown(path.join('lessons', filename), frontmatter as unknown as Record<string, unknown>, content);
     return filename;
   }
 
@@ -205,6 +198,6 @@ export class WorkspaceManager {
     };
 
     const filename = `${conceptId}.md`;
-    await this.writeMarkdown(path.join('concepts', filename), frontmatter, content);
+    await this.writeMarkdown(path.join('concepts', filename), frontmatter as unknown as Record<string, unknown>, content);
   }
 }

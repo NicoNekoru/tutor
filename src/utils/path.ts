@@ -18,7 +18,11 @@ export function resolveCourseRoot(baseDir: string, courseId: string): string {
   return path.resolve(baseDir, 'courses', courseId);
 }
 
-export function getWorkspacePaths(courseRoot: string) {
+export function getWorkspacePaths(baseDir: string, courseId?: string) {
+  const courseRoot = courseId
+    ? resolveCourseRoot(baseDir, courseId)
+    : baseDir;
+
   return {
     root: courseRoot,
     manifest: path.join(courseRoot, 'manifest.yaml'),

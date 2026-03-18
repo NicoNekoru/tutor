@@ -1,8 +1,6 @@
 import path from 'path';
 import { promises as fs } from 'fs';
-import { parse } from 'front-matter';
-import { marked } from 'marked';
-import { v4 as uuidv4 } from 'uuid';
+import parse from 'front-matter';
 import {
   DocumentKind,
   ChunkKind,
@@ -22,7 +20,7 @@ function checksum(content: string): string {
   let hash = 0;
   for (let i = 0; i < content.length; i++) {
     hash = ((hash << 5) - hash) + content.charCodeAt(i);
-    hash |= 0; // Convert to 32-bit integer
+    hash |= 0;
   }
   return hash.toString(36);
 }
@@ -33,17 +31,12 @@ function splitByHeadings(markdown: string): Array<{ heading?: string; content: s
   const chunks: Array<{ heading?: string; content: string }> = [];
   let currentChunk: { heading?: string; content: string } = { content: '' };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Check if this is a heading
+  for (const line of lines) {
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      // Save previous chunk if it has content
       if (currentChunk.content.trim()) {
         chunks.push(currentChunk);
       }
-      // Start new chunk with heading
       currentChunk = {
         heading: headingMatch[2],
         content: line + '\n',
@@ -53,7 +46,6 @@ function splitByHeadings(markdown: string): Array<{ heading?: string; content: s
     }
   }
 
-  // Don't forget the last chunk
   if (currentChunk.content.trim()) {
     chunks.push(currentChunk);
   }
@@ -61,63 +53,32 @@ function splitByHeadings(markdown: string): Array<{ heading?: string; content: s
   return chunks;
 }
 
-// Determine chunk kind based on heading content and context
+// Determine chunk kind based on heading content
 function inferChunkKind(
-  heading?: string,
-  content: string = '',
+  heading: string | undefined,
+  _content: string,
   documentKind: DocumentKind
 ): ChunkKind {
   if (!heading) {
-    // For frontmatter summary or intro
-    if (content.includes('---') && content.includes('course') && documentKind === 'syllabus') {
-      return 'summary';
-    }
     return 'overview';
   }
 
   const h = heading.toLowerCase();
 
-  if (h.includes('objective') || h.includes('goal')) {
-    return 'objective';
-  }
-  if (h.includes('motivation') || h.includes('why')) {
-    return 'motivation';
-  }
-  if (h.includes('definition') || h.includes('define')) {
-    return 'definition';
-  }
-  if (h.includes('theorem') || h.includes('lemma') || h.includes('proposition')) {
-    return 'theorem';
-  }
-  if (h.includes('proof') || h.includes('proof of')) {
-    return 'proof';
-  }
-  if (h.includes('example') || h.includes('illustration')) {
-    return 'example';
-  }
-  if (h.includes('exercise') || h.includes('problem') || h.includes('question')) {
-    return 'exercise';
-  }
-  if (h.includes('misconception') || h.includes('common mistake') || h.includes('confusion')) {
-    return 'misconception';
-  }
-  if (h.includes('summary') || h.includes('recap') || h.includes('conclusion')) {
-    return 'summary';
-  }
-  if (h.includes('reflection') || h.includes('thoughts')) {
-    return 'reflection';
-  }
-  if (h.includes('faq') || h.includes('?')) {
-    return 'faq';
-  }
+  if (h.includes('objective') || h.includes('goal')) return 'objective';
+  if (h.includes('motivation') || h.includes('why')) return 'motivation';
+  if (h.includes('definition') || h.includes('define')) return 'definition';
+  if (h.includes('theorem') || h.includes('lemma') || h.includes('proposition')) return 'theorem';
+  if (h.includes('proof')) return 'proof';
+  if (h.includes('example') || h.includes('illustration')) return 'example';
+  if (h.includes('exercise') || h.includes('problem') || h.includes('question')) return 'exercise';
+  if (h.includes('misconception') || h.includes('common mistake') || h.includes('confusion')) return 'misconception';
+  if (h.includes('summary') || h.includes('recap') || h.includes('conclusion')) return 'summary';
+  if (h.includes('reflection') || h.includes('thoughts')) return 'reflection';
+  if (h.includes('faq') || h.includes('?')) return 'faq';
 
-  // Default based on document type
-  if (documentKind === 'concept') {
-    return 'definition';
-  }
-  if (documentKind === 'lesson') {
-    return 'overview';
-  }
+  if (documentKind === 'concept') return 'definition';
+  if (documentKind === 'lesson') return 'overview';
 
   return 'overview';
 }
@@ -130,13 +91,18 @@ export function extractDocumentEntry(
   kind: DocumentKind
 ): DocumentEntry | null {
   try {
-    const { attributes } = parse(content);
+    let attributes: Record<string, any> = {};
 
-    // You could use path.basename without extension as a default ID
+    // Only parse frontmatter for markdown files
+    if (filePath.endsWith('.md')) {
+      const parsed = parse(content);
+      attributes = parsed.attributes as Record<string, any>;
+    }
+
     const filename = path.basename(filePath);
     const idFromFile = path.basename(filename, path.extname(filename));
 
-    let doc: DocumentEntry = {
+    const doc: DocumentEntry = {
       id: '',
       path: relativePath,
       kind,
@@ -145,55 +111,42 @@ export function extractDocumentEntry(
       checksum: checksum(content),
     };
 
-    // Type-specific parsing
     switch (kind) {
-      case 'lesson':
-        const lesson = attributes as LessonFrontmatter;
+      case 'lesson': {
+        const lesson = attributes as Partial<LessonFrontmatter>;
         doc.id = lesson.id || idFromFile;
         doc.title = lesson.title;
         doc.lessonId = lesson.id;
-        doc.conceptId = undefined;
         doc.unit = lesson.unit;
         break;
-
-      case 'concept':
-        const concept = attributes as ConceptFrontmatter;
+      }
+      case 'concept': {
+        const concept = attributes as Partial<ConceptFrontmatter>;
         doc.id = concept.id || idFromFile;
         doc.title = concept.title;
         doc.conceptId = concept.id;
-        doc.lessonId = undefined;
-        doc.unit = undefined;
         break;
-
+      }
       case 'syllabus':
         doc.id = 'syllabus';
         doc.title = 'Syllabus';
         break;
-
       case 'manifest':
         doc.id = 'manifest';
         doc.title = 'Course Manifest';
         break;
-
       case 'state':
-        // For state files like mastery.yaml
-        doc.id = path.basename(relativePath, '.yaml');
-        doc.title = doc.id;
-        break;
-
-      case 'assignment':
         doc.id = idFromFile;
-        doc.title = (attributes as { title?: string }).title || doc.id;
+        doc.title = idFromFile;
         break;
-
+      case 'assignment':
       case 'session_log':
         doc.id = idFromFile;
-        doc.title = (attributes as { title?: string }).title || doc.id;
+        doc.title = (attributes as { title?: string }).title || idFromFile;
         break;
-
       case 'config':
         doc.id = idFromFile;
-        doc.title = doc.id;
+        doc.title = idFromFile;
         break;
     }
 
@@ -204,15 +157,14 @@ export function extractDocumentEntry(
   }
 }
 
-// Main function: given a document entry and content, produce chunks
+// Given a document entry and content, produce chunks
 export function extractChunks(
   doc: DocumentEntry,
   content: string
 ): ChunkEntry[] {
   const chunks: ChunkEntry[] = [];
 
-  // If it's not a markdown file, treat as a single chunk
-  if (!path.basename(doc.path).endsWith('.md')) {
+  if (!doc.path.endsWith('.md')) {
     chunks.push({
       id: `${doc.id}:full`,
       documentId: doc.id,
@@ -224,7 +176,6 @@ export function extractChunks(
     return chunks;
   }
 
-  // Parse frontmatter + markdown body
   const { attributes, body } = parse(content);
 
   // First chunk: frontmatter/metadata summary
@@ -239,16 +190,15 @@ export function extractChunks(
     tokenEstimate: estimateTokens(fmSummary),
   });
 
-  // Then split the markdown body
+  // Split the markdown body by headings
   const markdownChunks = splitByHeadings(body);
 
   for (let i = 0; i < markdownChunks.length; i++) {
     const { heading, content: chunkContent } = markdownChunks[i];
     const chunkKind = inferChunkKind(heading, chunkContent, doc.kind);
 
-    // Generate a stable chunk ID
     const chunkId = heading
-      ? `${doc.id}:${heading.toLowerCase().replace(/\s+/g, '-')}-${i}`
+      ? `${doc.id}:${heading.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}-${i}`
       : `${doc.id}:chunk-${i}`;
 
     chunks.push({
@@ -265,29 +215,31 @@ export function extractChunks(
   return chunks;
 }
 
-// File discovery
-export async function discoverFiles(
-  workspaceRoot: string,
-  patterns: string[]
-): Promise<string[]> {
-  // For now, simple recursive walk
+// File discovery — walk directory and collect .md and .yaml files
+export async function discoverFiles(workspaceRoot: string): Promise<string[]> {
   const allFiles: string[] = [];
+  const VALID_EXTENSIONS = new Set(['.md', '.yaml', '.yml']);
 
   async function walk(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
+
+      // Skip index directory and hidden dirs
       if (entry.isDirectory()) {
+        if (entry.name === 'index' || entry.name === 'transcripts' || entry.name.startsWith('.')) {
+          continue;
+        }
         await walk(fullPath);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name);
-        const matchesPattern = patterns.some((pattern) => {
-          if (pattern.endsWith('/*')) {
-            return entry.name.endsWith(pattern.slice(0, -2));
-          }
-          return pattern === entry.name || pattern.endsWith(ext);
-        });
-        if (matchesPattern) {
+        if (VALID_EXTENSIONS.has(ext)) {
           allFiles.push(fullPath);
         }
       }

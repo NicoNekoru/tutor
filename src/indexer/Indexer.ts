@@ -1,20 +1,15 @@
 import path from 'path';
 import { promises as fs } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import parse from 'front-matter';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
 import { SQLiteDatabase } from './Database';
 import {
-  DocumentKind,
-  DocumentEntry,
   ChunkEntry,
-  ChunkTag,
-  ConceptEdge,
 } from '../schemas/types';
 import {
   discoverFiles,
   extractDocumentEntry,
   extractChunks,
-  estimateTokens,
 } from './ChunkExtractor';
 
 export class Indexer {
@@ -29,33 +24,15 @@ export class Indexer {
   async indexWorkspace(workspaceRoot: string): Promise<void> {
     console.log('Indexing workspace...');
 
-    // Discover files based on known patterns
-    const files = await discoverFiles(workspaceRoot, [
-      '**/*.md',
-      '**/*.yaml',
-      '**/*.yml',
-      '**/manifest.yaml',
-      '**/syllabus.md',
-      '**/configs/*.yaml',
-      '**/lessons/*.md',
-      '**/concepts/*.md',
-      '**/assignments/*.md',
-      '**/logs/**/*.md',
-      '**/state/*.yaml',
-    ]);
+    const files = await discoverFiles(workspaceRoot);
 
     console.log(`Found ${files.length} files to index`);
 
-    try {
-      for (const filePath of files) {
-        await this.indexFile(workspaceRoot, filePath);
-      }
-
-      console.log('Indexing completed successfully');
-    } catch (error) {
-      console.error('Indexing failed:', error);
-      throw error;
+    for (const filePath of files) {
+      await this.indexFile(workspaceRoot, filePath);
     }
+
+    console.log('Indexing completed successfully');
   }
 
   private async indexFile(
@@ -93,7 +70,7 @@ export class Indexer {
       for (const chunk of chunks) {
         this.db.upsertChunk(chunk);
 
-        // Extract and store tags from chunk content (simple keyword extraction)
+        // Extract and store tags from chunk content
         const tags = this.extractTags(chunk);
         for (const tag of tags) {
           this.db.addChunkTag(chunk.id, tag);
@@ -102,43 +79,24 @@ export class Indexer {
 
       // If document has concept info, update concept edges
       if (kind === 'concept' && doc.conceptId) {
-        this.indexConceptEdges(doc.id, relativePath, content);
+        this.indexConceptEdges(doc.conceptId, content);
       }
     }
   }
 
-  private inferDocumentKind(relativePath: string): DocumentKind {
+  private inferDocumentKind(relativePath: string) {
     const parts = relativePath.split(path.sep);
 
-    if (parts.includes('configs')) {
-      return 'config';
-    }
-    if (parts.includes('lessons')) {
-      return 'lesson';
-    }
-    if (parts.includes('concepts')) {
-      return 'concept';
-    }
-    if (parts.includes('assignments')) {
-      return 'assignment';
-    }
-    if (parts.includes('logs')) {
-      if (parts.includes('sessions')) {
-        return 'session_log';
-      }
-      return 'session_log'; // summaries are also logs
-    }
-    if (parts.includes('state')) {
-      return 'state';
-    }
-    if (relativePath === 'manifest.yaml' || path.basename(relativePath) === 'manifest.yaml') {
-      return 'manifest';
-    }
-    if (relativePath === 'syllabus.md' || path.basename(relativePath) === 'syllabus.md') {
-      return 'syllabus';
-    }
+    if (parts.includes('configs')) return 'config' as const;
+    if (parts.includes('lessons')) return 'lesson' as const;
+    if (parts.includes('concepts')) return 'concept' as const;
+    if (parts.includes('assignments')) return 'assignment' as const;
+    if (parts.includes('logs')) return 'session_log' as const;
+    if (parts.includes('state')) return 'state' as const;
+    if (path.basename(relativePath) === 'manifest.yaml') return 'manifest' as const;
+    if (path.basename(relativePath) === 'syllabus.md') return 'syllabus' as const;
 
-    return 'config'; // default fallback
+    return 'config' as const;
   }
 
   private extractTags(chunk: ChunkEntry): string[] {
@@ -147,13 +105,7 @@ export class Indexer {
     // Add chunk kind as a tag
     tags.push(`kind:${chunk.chunkKind}`);
 
-    // Extract potential concept tags from ID
-    if (chunk.documentId.includes(':')) {
-      const conceptPart = chunk.documentId.split(':')[0];
-      tags.push(`concept:${conceptPart}`);
-    }
-
-    // Extract any hashtags from content (simple regex)
+    // Extract any hashtags from content
     const hashtagRegex = /#([a-zA-Z0-9_-]+)/g;
     let match;
     while ((match = hashtagRegex.exec(chunk.content)) !== null) {
@@ -163,44 +115,41 @@ export class Indexer {
     return tags;
   }
 
-  private indexConceptEdges(
-    conceptId: string,
-    filePath: string,
-    content: string
-  ): void {
-    // Parse concept frontmatter to get prerequisites and related
-    const { attributes } = parse(content);
-    const conceptAttrs = attributes as any;
+  private indexConceptEdges(conceptId: string, content: string): void {
+    try {
+      const { attributes } = parse(content);
+      const attrs = attributes as Record<string, any>;
 
-    if (conceptAttrs.prerequisites) {
-      for (const prereq of conceptAttrs.prerequisites) {
-        this.db.upsertConceptEdge({
-          sourceConceptId: conceptId,
-          relation: 'prerequisite',
-          targetConceptId: prereq,
-        });
+      if (Array.isArray(attrs.prerequisites)) {
+        for (const prereq of attrs.prerequisites) {
+          this.db.upsertConceptEdge({
+            source_concept_id: conceptId,
+            relation: 'prerequisite',
+            target_concept_id: prereq,
+          });
+        }
       }
-    }
 
-    if (conceptAttrs.related) {
-      for (const related of conceptAttrs.related) {
-        this.db.upsertConceptEdge({
-          sourceConceptId: conceptId,
-          relation: 'related',
-          targetConceptId: related,
-        });
+      if (Array.isArray(attrs.related)) {
+        for (const related of attrs.related) {
+          this.db.upsertConceptEdge({
+            source_concept_id: conceptId,
+            relation: 'related',
+            target_concept_id: related,
+          });
+        }
       }
+    } catch {
+      // Skip if frontmatter parsing fails
     }
   }
 
   async reindex(workspaceRoot: string): Promise<void> {
-    // Clear all data and re-index
     console.log('Clearing existing index...');
     this.db.exec('DELETE FROM chunk_tags');
     this.db.exec('DELETE FROM concept_edges');
     this.db.exec('DELETE FROM chunks');
     this.db.exec('DELETE FROM documents');
-    // Reset autoincrement not needed as we use UUIDs
 
     await this.indexWorkspace(workspaceRoot);
   }

@@ -1,9 +1,9 @@
+import path from 'path';
+import * as yaml from 'yaml';
 import { v4 as uuidv4 } from 'uuid';
 import {
   GenerateRequest,
   GenerateResult,
-  ToolSpec,
-  MessageRole,
   MessageIntent,
   TutorContract,
   StudentProfile,
@@ -11,11 +11,11 @@ import {
   SessionSummary,
   SearchResult,
   RetrievalFilters,
+  ModelAdapter,
 } from '../schemas/types';
-import { ModelAdapter } from '../adapter/ModelAdapter';
 import { RetrievalEngine } from '../retrieval/RetrievalEngine';
 import { WorkspaceManager } from '../workspace/WorkspaceManager';
-import { Database } from '../indexer/Database';
+import { SQLiteDatabase } from '../indexer/Database';
 
 // Intent classifier (simple rule-based for now)
 function classifyIntent(message: string): MessageIntent {
@@ -47,21 +47,21 @@ function classifyIntent(message: string): MessageIntent {
 }
 
 // Build tutor contract from tutor.yaml
-function buildTutorContract(tutorConfig: any): TutorContract {
+function buildTutorContract(tutorConfig: Record<string, any>): TutorContract {
   return {
     identity: {
       name: tutorConfig.name || 'Tutor',
-      role: tutorConfig.persona.role,
+      role: tutorConfig.persona?.role || 'tutor',
     },
     style: {
-      rigorLevel: 5, // derive from config
-      formality: tutorConfig.persona.tone.includes('formal') ? 'formal' : 'semi-formal',
+      rigorLevel: 5,
+      formality: tutorConfig.persona?.tone?.includes('formal') ? 'formal' : 'semi-formal',
       leadWith: ['theory', 'examples'],
     },
     teachingMethod: {
-      emphasizeProofs: tutorConfig.pedagogy.emphasize.includes('proof techniques'),
-      useAnalogies: tutorConfig.pedagogy.useAnalogies ?? true,
-      adaptToPace: tutorConfig.adaptationRules.slowDownOnConfusion,
+      emphasizeProofs: tutorConfig.pedagogy?.emphasize?.includes('proof techniques') ?? false,
+      useAnalogies: true,
+      adaptToPace: tutorConfig.adaptationRules?.slowDownOnConfusion ?? true,
       maintainContinuity: true,
     },
     boundaries: {
@@ -74,16 +74,17 @@ export class Orchestrator {
   private modelAdapter: ModelAdapter;
   private retrieval: RetrievalEngine;
   private ws: WorkspaceManager;
-  private db: Database;
+  private db: SQLiteDatabase;
   private tutorContract: TutorContract | null = null;
   private studentProfile: StudentProfile | null = null;
   private courseManifest: CourseManifest | null = null;
+  private sessionMessages: Array<{ role: string; content: string }> = [];
 
   constructor(
     modelAdapter: ModelAdapter,
     retrieval: RetrievalEngine,
     ws: WorkspaceManager,
-    db: Database
+    db: SQLiteDatabase
   ) {
     this.modelAdapter = modelAdapter;
     this.retrieval = retrieval;
@@ -92,33 +93,29 @@ export class Orchestrator {
   }
 
   async initializeSession(): Promise<void> {
-    // Load course state
     await this.loadCourseState();
   }
 
   private async loadCourseState(): Promise<void> {
-    const paths = this.ws.getPaths();
+    const courseRoot = this.ws.getCourseRoot();
 
     // Read tutor config
-    const tutorContent = await this.ws.readFile(path.relative(this.ws.getCourseRoot(), paths.tutorConfig));
-    this.tutorContract = buildTutorContract(this.parseYAML(tutorContent));
+    const tutorContent = await this.ws.readFile(path.join('configs', 'tutor.yaml'));
+    this.tutorContract = buildTutorContract(yaml.parse(tutorContent));
 
     // Read student profile
-    const studentContent = await this.ws.readFile(path.relative(this.ws.getCourseRoot(), paths.studentConfig));
-    this.studentProfile = this.parseYAML(studentContent);
+    const studentContent = await this.ws.readFile(path.join('configs', 'student.yaml'));
+    this.studentProfile = yaml.parse(studentContent);
 
     // Read manifest
-    const manifestContent = await this.ws.readFile(path.relative(this.ws.getCourseRoot(), paths.manifest));
-    this.courseManifest = this.parseYAML(manifestContent);
+    const manifestContent = await this.ws.readFile('manifest.yaml');
+    this.courseManifest = yaml.parse(manifestContent);
   }
 
-  private parseYAML<T>(content: string): T {
-    // Simple YAML parse; use proper YAML parser
-    const yaml = require('yaml');
-    return yaml.parse(content);
-  }
+  async processTurn(userMessage: string): Promise<{ response: string; retrievedContext: SearchResult[]; toolCalls?: any[] }> {
+    // Track message
+    this.sessionMessages.push({ role: 'user', content: userMessage });
 
-  async processTurn(userMessage: string): Promise<{ response: string; toolCalls?: any[] }> {
     // 1. Classify intent
     const intent = classifyIntent(userMessage);
 
@@ -134,17 +131,25 @@ export class Orchestrator {
     // 5. Call model
     const result = await this.modelAdapter.generate(request);
 
-    // 6. Log turn
+    // 6. Track response
+    const responseText = result.text || '';
+    this.sessionMessages.push({ role: 'assistant', content: responseText });
+
+    // 7. Write transcript
+    await this.ws.writeTranscriptEntry({ role: 'user', content: userMessage });
+    await this.ws.writeTranscriptEntry({ role: 'assistant', content: responseText });
+
+    // 8. Log turn event
     this.logEvent('turn_completed', {
       intent,
-      userMessage,
+      userMessage: userMessage.substring(0, 100),
       retrievedChunkCount: retrievedChunks.length,
-      modelOutputLength: result.text?.length ?? 0,
+      modelOutputLength: responseText.length,
     });
 
-    // 7. Return response
     return {
-      response: result.text || '',
+      response: responseText,
+      retrievedContext: retrievedChunks,
       toolCalls: result.toolCalls,
     };
   }
@@ -184,7 +189,7 @@ export class Orchestrator {
         break;
 
       case 'review_request':
-        filters.kinds = ['session_log', 'misconception'];
+        filters.kinds = ['session_log'];
         topK = 5;
         break;
 
@@ -234,7 +239,7 @@ export class Orchestrator {
       { role: 'system', content: systemPrompt },
     ];
 
-    // Add retrieved context as a system message or user message
+    // Add retrieved context as a system message
     if (contextText) {
       messages.push({
         role: 'system',
@@ -242,11 +247,14 @@ export class Orchestrator {
       });
     }
 
-    // Add user message
-    messages.push({
-      role: 'user',
-      content: userMessage,
-    });
+    // Add recent conversation history (last 6 messages for continuity)
+    const recentMessages = this.sessionMessages.slice(-6);
+    for (const msg of recentMessages) {
+      messages.push({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      });
+    }
 
     return {
       messages,
@@ -264,8 +272,7 @@ export class Orchestrator {
     const student = this.studentProfile;
     const course = this.courseManifest;
 
-    return `
-You are ${tutor.identity.name}, a ${tutor.identity.role}.
+    return `You are ${tutor.identity.name}, a ${tutor.identity.role}.
 
 Your tutoring style:
 - Rigor level: ${tutor.style.rigorLevel}/5
@@ -273,10 +280,7 @@ Your tutoring style:
 - Lead with: ${tutor.style.leadWith.join(', ')}
 
 Your pedagogy:
-${tutor.teachingMethod.emphasizeProofs ? '- Emphasize proofs and precise reasoning\n' : ''}
-${tutor.teachingMethod.useAnalogies ? '- Use analogies to explain concepts\n' : ''}
-${tutor.teachingMethod.adaptToPace ? '- Adapt pace based on student understanding\n' : ''}
-
+${tutor.teachingMethod.emphasizeProofs ? '- Emphasize proofs and precise reasoning\n' : ''}${tutor.teachingMethod.useAnalogies ? '- Use analogies to explain concepts\n' : ''}${tutor.teachingMethod.adaptToPace ? '- Adapt pace based on student understanding\n' : ''}
 Student: ${student.displayName}
 Goals: ${student.goals.join(', ')}
 Preferred pace: ${student.preferences.pace}
@@ -286,14 +290,15 @@ Course: ${course.title}
 Current status: ${course.status}
 Subject: ${course.subject}
 
-Use the provided course context to inform your answers. Maintain continuity with previous lessons. Be supportive and encourage questions.
-    `.trim();
+Use the provided course context to inform your answers. Maintain continuity with previous lessons. Be supportive and encourage questions.`;
   }
 
-  async consolidateSession(sessionId: string): Promise<SessionSummary> {
-    // Ask the model to produce a structured session summary
-    const prompt = `
-Based on the tutoring session transcript, produce a structured summary.
+  async consolidateSession(): Promise<SessionSummary> {
+    const transcript = this.sessionMessages
+      .map((m) => `${m.role}: ${m.content}`)
+      .join('\n\n');
+
+    const prompt = `Based on the tutoring session transcript, produce a structured summary.
 
 Return a JSON object with these fields:
 - title: string
@@ -306,12 +311,11 @@ Return a JSON object with these fields:
 - assignments: array of { title: string, body: string }
 
 Transcript:
-${await this.getSessionTranscript()}
-    `;
+${transcript}`;
 
     const request: GenerateRequest = {
       messages: [
-        { role: 'system', content: 'You are a summarization assistant.' },
+        { role: 'system', content: 'You are a summarization assistant. Return valid JSON only.' },
         { role: 'user', content: prompt },
       ],
       responseFormat: 'json',
@@ -321,18 +325,14 @@ ${await this.getSessionTranscript()}
     const result = await this.modelAdapter.generate(request);
 
     try {
-      const summary = JSON.parse(result.text || '{}') as SessionSummary;
-      return summary;
-    } catch (error) {
-      console.error('Failed to parse consolidation JSON:', error);
+      return JSON.parse(result.text || '{}') as SessionSummary;
+    } catch {
       throw new Error('Model returned invalid JSON for session summary');
     }
   }
 
-  private async getSessionTranscript(): Promise<string> {
-    // Read the current session transcript from state or memory
-    // Implementation: read from session file or in-memory buffer
-    return '[Transcript not implemented yet]';
+  getSessionMessages(): Array<{ role: string; content: string }> {
+    return this.sessionMessages;
   }
 
   private logEvent(type: string, payload: unknown): void {
