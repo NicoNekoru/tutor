@@ -1,22 +1,36 @@
+// @ts-ignore - sql.js doesn't ship types
 import initSqlJs from 'sql.js';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { DocumentKind, ChunkKind } from '../schemas/types';
 
 let SQL: any = null;
 
 export class SQLiteDatabase {
-  private db: any;
+  private db!: any;
+  private dbPath?: string;
 
-  constructor() {
-    // lazy init - call initialize() later
+  constructor(dbPath?: string) {
+    this.dbPath = dbPath;
   }
 
   async initialize(): Promise<void> {
     if (!SQL) {
-      SQL = await initSqlJs({ locateFile: (file: string) => `https://sql.js.org/dist/${file}` });
+      SQL = await initSqlJs();
     }
-    if (!this.db) {
+
+    if (this.dbPath) {
+      try {
+        const buffer = await fs.readFile(this.dbPath);
+        this.db = new SQL.Database(buffer);
+      } catch {
+        // File doesn't exist yet, create new database
+        this.db = new SQL.Database();
+      }
+    } else {
       this.db = new SQL.Database();
     }
+
     this.createSchema();
   }
 
@@ -95,6 +109,15 @@ export class SQLiteDatabase {
     `);
   }
 
+  async save(): Promise<void> {
+    if (this.dbPath) {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
+      await fs.writeFile(this.dbPath, buffer);
+    }
+  }
+
   exec(sql: string): void {
     this.db.run(sql);
   }
@@ -144,14 +167,13 @@ export class SQLiteDatabase {
     contentPreview: string;
     tags: string[];
   }> {
-    // Simplified: just basic LIKE search for MVP
     let sql = `
       SELECT c.id as chunk_id, c.document_id, d.path, d.kind, c.chunk_kind, c.heading, c.content
       FROM chunks c
       JOIN documents d ON c.document_id = d.id
       WHERE c.content LIKE ?
     `;
-    const params = [`%${query}%`];
+    const params: any[] = [`%${query}%`];
 
     if (filters?.kinds?.length) {
       const placeholders = filters.kinds.map(() => '?').join(',');
@@ -170,7 +192,9 @@ export class SQLiteDatabase {
       params.push(...filters.conceptIds);
     }
 
-    const rows = this.all(sql, params);
+    sql += ' LIMIT 50';
+
+    const rows = this.all<any>(sql, params);
     return rows.map((row: any) => {
       const chunkId = row.chunk_id as string;
       const tags = this.getChunkTags(chunkId);
@@ -180,8 +204,8 @@ export class SQLiteDatabase {
         path: row.path as string,
         score: 0,
         chunkKind: row.chunk_kind as ChunkKind,
-        heading: row.heading as string | null,
-        contentPreview: (row.content as string).substring(0, 200) + '...',
+        heading: (row.heading as string) || undefined,
+        contentPreview: (row.content as string).substring(0, 200),
         tags,
       };
     });
@@ -216,27 +240,26 @@ export class SQLiteDatabase {
     );
   }
 
-  logEvent(event: { id: string; event_type: string; created_at: string; payload_json: string }): void {
+  logEvent(event: { id: string; eventType: string; createdAt: string; payloadJson: string }): void {
     this.run(
       'INSERT INTO events (id, event_type, created_at, payload_json) VALUES (?, ?, ?, ?)',
-      [event.id, event.event_type, event.created_at, event.payload_json]
+      [event.id, event.eventType, event.createdAt, event.payloadJson]
     );
   }
 
-  logRetrieval(log: { id: string; created_at: string; query: string; filters_json: string; selected_chunk_ids_json: string; notes?: string }): void {
+  logRetrieval(log: { id: string; createdAt: string; query: string; filtersJson: string; selectedChunkIdsJson: string; notes?: string }): void {
     this.run(
       'INSERT INTO retrieval_log (id, created_at, query, filters_json, selected_chunk_ids_json, notes) VALUES (?, ?, ?, ?, ?, ?)',
-      [log.id, log.created_at, log.query, log.filters_json, log.selected_chunk_ids_json, log.notes ?? null]
+      [log.id, log.createdAt, log.query, log.filtersJson, log.selectedChunkIdsJson, log.notes ?? null]
     );
   }
 
   upsertDocument(doc: any): void {
     const now = new Date().toISOString();
-    const existing = this.get<{ created_at: string }>('SELECT created_at FROM documents WHERE id = ?', [doc.id]);
     this.run(
-      `INSERT OR REPLACE INTO documents (id, path, kind, title, lesson_id, concept_id, unit, updated_at, checksum, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?))`,
-      [doc.id, doc.path, doc.kind, doc.title ?? null, doc.lessonId ?? null, doc.conceptId ?? null, doc.unit ?? null, now, doc.checksum, existing ? existing.created_at : now, existing ? existing.created_at : now]
+      `INSERT OR REPLACE INTO documents (id, path, kind, title, lesson_id, concept_id, unit, created_at, updated_at, checksum)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [doc.id, doc.path, doc.kind, doc.title ?? null, doc.lessonId ?? null, doc.conceptId ?? null, doc.unit ?? null, doc.createdAt ?? now, doc.updatedAt ?? now, doc.checksum]
     );
   }
 
@@ -253,6 +276,8 @@ export class SQLiteDatabase {
   }
 
   deleteChunksByDocumentId(documentId: string): void {
+    // First delete tags for chunks of this document
+    this.run('DELETE FROM chunk_tags WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)', [documentId]);
     this.run('DELETE FROM chunks WHERE document_id = ?', [documentId]);
   }
 
