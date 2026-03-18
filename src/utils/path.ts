@@ -19,12 +19,12 @@ export function resolveCourseRoot(baseDir: string, courseId: string): string {
   return path.resolve(baseDir, 'courses', courseId);
 }
 
-export function getGlobalConfigDir(): string {
-  return path.join(os.homedir(), '.tutor');
+export function getGlobalConfigDir(overrideHome?: string): string {
+  return path.join(overrideHome ?? os.homedir(), '.tutor');
 }
 
-export function getGlobalPaths() {
-  const globalDir = getGlobalConfigDir();
+export function getGlobalPaths(overrideHome?: string) {
+  const globalDir = getGlobalConfigDir(overrideHome);
   return {
     root: globalDir,
     tutorConfig: path.join(globalDir, 'tutor.yaml'),
