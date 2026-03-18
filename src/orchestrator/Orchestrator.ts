@@ -18,7 +18,7 @@ import { WorkspaceManager } from '../workspace/WorkspaceManager';
 import { SQLiteDatabase } from '../indexer/Database';
 
 // Intent classifier (simple rule-based for now)
-function classifyIntent(message: string): MessageIntent {
+export function classifyIntent(message: string): MessageIntent {
   const lower = message.toLowerCase();
 
   if (lower.includes('next') || lower.includes('move on') || lower.includes('continue')) {
@@ -47,7 +47,7 @@ function classifyIntent(message: string): MessageIntent {
 }
 
 // Build tutor contract from tutor.yaml
-function buildTutorContract(tutorConfig: Record<string, any>): TutorContract {
+export function buildTutorContract(tutorConfig: Record<string, any>): TutorContract {
   return {
     identity: {
       name: tutorConfig.name || 'Tutor',

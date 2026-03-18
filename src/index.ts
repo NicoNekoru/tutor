@@ -13,6 +13,7 @@ import { Orchestrator } from './orchestrator/Orchestrator';
 import { TutorTUI } from './tui/TUI';
 import { TutorConfig } from './schemas/types';
 import { getGlobalPaths } from './utils/path';
+import { buildInitTutorConfig } from './init/buildInitTutorConfig';
 
 const program = new Command();
 const BASE_DIR = process.cwd();
@@ -28,42 +29,22 @@ program
   .option('--course-id <id>', 'Course identifier', 'my-course')
   .option('--subject <subject>', 'Subject area', 'mathematics')
   .option('--tutor-name <name>', 'Tutor name', 'Professor')
-  .option('--persona <style>', 'Tutor persona style', 'theoretical')
+  .option('--persona <style>', 'Tutor persona style')
   .option('--from-global', 'Seed course persona from global ~/.tutor/tutor.yaml defaults')
+  .option('--non-interactive', 'Skip all interactive prompts and use defaults')
   .action(async (options) => {
     console.log('Initializing new course...');
 
     const courseId = options.courseId;
     const subject = options.subject;
 
-    const courseTutorConfig: TutorConfig = {
-      name: `${options.tutorName} of ${subject.charAt(0).toUpperCase() + subject.slice(1)}`,
-      persona: {
-        style: options.persona,
-        tone: 'formal but supportive',
-        role: 'private tutor',
-        specialization: [subject],
-      },
-      pedagogy: {
-        defaultStructure: [
-          'motivation',
-          'precise definitions',
-          'theorem or principle',
-          'proof sketch',
-          'examples',
-          'student exercise',
-          'recap',
-        ],
-        emphasize: ['proof techniques', 'abstraction', 'invariants', 'exact reasoning'],
-        avoid: ['superficial intuition without formal grounding'],
-      },
-      adaptationRules: {
-        askDiagnosticQuestions: true,
-        slowDownOnConfusion: true,
-        revisitPrerequisitesIfNeeded: true,
-        weaveInMlConnections: 'occasionally',
-      },
-    };
+    // Build tutor config — prompts user interactively unless flags/--non-interactive
+    const courseTutorConfig = await buildInitTutorConfig({
+      tutorName: options.tutorName,
+      persona: options.persona,
+      subject,
+      nonInteractive: !!options.nonInteractive,
+    });
 
     // Create workspace
     const ws = new WorkspaceManager(BASE_DIR);

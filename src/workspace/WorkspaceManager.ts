@@ -219,9 +219,10 @@ export class WorkspaceManager {
 /**
  * Load the global tutor persona from ~/.tutor/tutor.yaml.
  * Returns null if no global persona is configured.
+ * Pass `overrideHome` to use a custom home directory (for testing).
  */
-export async function loadGlobalTutorConfig(): Promise<TutorConfig | null> {
-  const globalPaths = getGlobalPaths();
+export async function loadGlobalTutorConfig(overrideHome?: string): Promise<TutorConfig | null> {
+  const globalPaths = getGlobalPaths(overrideHome);
   if (!(await fileExists(globalPaths.tutorConfig))) {
     return null;
   }
@@ -231,9 +232,10 @@ export async function loadGlobalTutorConfig(): Promise<TutorConfig | null> {
 
 /**
  * Save a tutor persona as the global default in ~/.tutor/tutor.yaml.
+ * Pass `overrideHome` to use a custom home directory (for testing).
  */
-export async function saveGlobalTutorConfig(config: TutorConfig): Promise<void> {
-  const globalPaths = getGlobalPaths();
+export async function saveGlobalTutorConfig(config: TutorConfig, overrideHome?: string): Promise<void> {
+  const globalPaths = getGlobalPaths(overrideHome);
   await ensureDir(globalPaths.root);
   await fs.writeFile(globalPaths.tutorConfig, yaml.stringify(config), 'utf-8');
 }
