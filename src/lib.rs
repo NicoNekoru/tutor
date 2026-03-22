@@ -1,3 +1,16 @@
+// ============================================================================
+// Crate-level lint policy: treat warnings as errors.
+// ============================================================================
+#![deny(warnings)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+
+// Pedantic exceptions
+#![allow(clippy::module_name_repetitions)]  // e.g., AtomKind inside types::Atom
+#![allow(clippy::must_use_candidate)]       // too noisy for a library crate
+#![allow(clippy::missing_errors_doc)]       // we'll add doc comments in a later pass
+#![allow(clippy::missing_panics_doc)]
+
 pub mod error;
 pub mod hash;
 pub mod types;
