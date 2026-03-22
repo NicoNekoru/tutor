@@ -4,7 +4,9 @@ use crate::envelope::Storable;
 use crate::error::Result;
 use crate::hash::Hash;
 use crate::store::ObjectStore;
-use crate::types::*;
+use crate::types::{
+    Atom, AtomKind, Edge, EdgeLabel, Event, Frame, FrameKind, ObjectType,
+};
 
 /// Traversal direction for graph walks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +41,7 @@ impl<'a> Graph<'a> {
     }
 
     /// Collect all Atoms reachable from a Frame (or any starting hash),
-    /// optionally filtered by AtomKind. BFS through Frames, collecting Atoms.
+    /// optionally filtered by `AtomKind`. BFS through Frames, collecting Atoms.
     pub fn collect_atoms(
         &self,
         root: &Hash,
@@ -171,8 +173,8 @@ impl<'a> Graph<'a> {
     }
 
     /// Collect all Events in a session by walking parent links backwards
-    /// from the given event to the SessionStart. Returns events in
-    /// chronological order (SessionStart first).
+    /// from the given event to the `SessionStart`. Returns events in
+    /// chronological order (`SessionStart` first).
     pub fn session_events(&self, session_tip: &Hash) -> Result<Vec<(Hash, Event)>> {
         let mut events = Vec::new();
         let mut visited = HashSet::new();
@@ -196,12 +198,11 @@ impl<'a> Graph<'a> {
         Ok(events)
     }
 
-    /// Build the recursive call tree from a root ModelCall event.
-    /// Follows SpawnedChild edges and parent_call links in traces.
+    /// Build the recursive call tree from a root `ModelCall` event.
+    /// Follows `SpawnedChild` edges and `parent_call` links in traces.
     pub fn call_tree(&self, root_event: &Hash) -> Result<Option<CallTreeNode>> {
-        let event = match self.store.read::<Event>(root_event)? {
-            Some(e) => e,
-            None => return Ok(None),
+        let Some(event) = self.store.read::<Event>(root_event)? else {
+            return Ok(None);
         };
 
         // Find child events: look at outputs with role containing "child_call",
@@ -228,9 +229,8 @@ impl<'a> Graph<'a> {
         frame_hash: &Hash,
         label_filter: Option<&[EdgeLabel]>,
     ) -> Result<Vec<Edge>> {
-        let frame = match self.store.read::<Frame>(frame_hash)? {
-            Some(f) => f,
-            None => return Ok(Vec::new()),
+        let Some(frame) = self.store.read::<Frame>(frame_hash)? else {
+            return Ok(Vec::new());
         };
 
         match label_filter {
@@ -243,15 +243,14 @@ impl<'a> Graph<'a> {
         }
     }
 
-    /// Find all concept atoms that a StudentModel frame tracks mastery for.
-    /// Returns (concept_hash, mastery_level) pairs.
+    /// Find all concept atoms that a `StudentModel` frame tracks mastery for.
+    /// Returns (`concept_hash`, `mastery_level`) pairs.
     pub fn student_mastery_map(
         &self,
         student_model_hash: &Hash,
     ) -> Result<Vec<(Hash, f64)>> {
-        let frame = match self.store.read::<Frame>(student_model_hash)? {
-            Some(f) => f,
-            None => return Ok(Vec::new()),
+        let Some(frame) = self.store.read::<Frame>(student_model_hash)? else {
+            return Ok(Vec::new());
         };
 
         Ok(frame
@@ -263,7 +262,7 @@ impl<'a> Graph<'a> {
     }
 
     /// Find the shortest path between two hashes (BFS, forward only).
-    /// Returns None if no path exists within max_depth.
+    /// Returns None if no path exists within `max_depth`.
     pub fn shortest_path(
         &self,
         from: &Hash,
@@ -315,9 +314,8 @@ impl<'a> Graph<'a> {
     /// Get all direct forward neighbors of a hash (edge targets for Frames,
     /// parent/input/output refs for Events, nothing for Atoms).
     fn forward_neighbors(&self, hash: &Hash) -> Result<Vec<Hash>> {
-        let env = match self.store.read_raw(hash)? {
-            Some(e) => e,
-            None => return Ok(Vec::new()),
+        let Some(env) = self.store.read_raw(hash)? else {
+            return Ok(Vec::new());
         };
 
         match env.object_type {
@@ -351,8 +349,12 @@ impl<'a> Graph<'a> {
 }
 
 #[cfg(test)]
+#[allow(clippy::doc_markdown)]
 mod tests {
     use super::*;
+    use crate::types::{
+        AtomContent, AtomMetadata, CallTrace, EventKind, EventMetadata, EventRef, FrameMetadata,
+    };
     use chrono::{DateTime, Utc};
     use tempfile::TempDir;
     use std::fs;
@@ -532,7 +534,7 @@ mod tests {
     #[test]
     fn test_shortest_path() {
         let (_dir, store) = setup();
-        let (course, lesson_bs, lesson_arrays, atoms) = build_test_course(&store);
+        let (course, _lesson_bs, lesson_arrays, atoms) = build_test_course(&store);
         let graph = Graph::new(&store);
 
         // Course → lesson_bs → concept (depth 2)

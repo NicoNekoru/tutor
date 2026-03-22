@@ -66,7 +66,7 @@ impl ObjectStore {
         fs::create_dir_all(shard_dir).map_err(|e| Error::io(e, shard_dir))?;
 
         let tmp_path = self.tmp_dir.join(format!("write_{}", hash.short()));
-        fs::write(&tmp_path, &envelope_bytes).map_err(|e| Error::io(e, &tmp_path))?;
+        fs::write(&tmp_path, envelope_bytes).map_err(|e| Error::io(e, &tmp_path))?;
         fs::rename(&tmp_path, &dest).map_err(|e| Error::io(e, &dest))?;
 
         Ok(hash)
@@ -149,7 +149,7 @@ impl ObjectStore {
                 let obj_entry = obj_entry.map_err(|e| Error::io(e, shard_entry.path()))?;
                 let obj_name = obj_entry.file_name();
                 let obj_str = obj_name.to_string_lossy();
-                let full_hex = format!("{}{}", shard_str, obj_str);
+                let full_hex = format!("{shard_str}{obj_str}");
                 if let Ok(hash) = Hash::from_hex(&full_hex) {
                     hashes.push(hash);
                 }

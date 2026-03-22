@@ -6,9 +6,11 @@ use crate::envelope::Storable;
 use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::store::ObjectStore;
-use crate::types::*;
+use crate::types::{
+    Atom, AtomKind, EdgeLabel, Event, EventKind, Frame, FrameKind, ObjectType,
+};
 
-/// Secondary indexes backed by SQLite.
+/// Secondary indexes backed by `SQLite`.
 ///
 /// All data here is DERIVED and rebuildable from the object store.
 /// Missing or corrupt indexes degrade query performance, not correctness.
@@ -23,7 +25,7 @@ impl Index {
         std::fs::create_dir_all(&index_dir).map_err(|e| Error::io(e, &index_dir))?;
         let db_path = index_dir.join("index.sqlite3");
         let conn =
-            Connection::open(&db_path).map_err(|e| Error::Serialization(e.to_string()))?;
+            Connection::open(db_path).map_err(|e| Error::Serialization(e.to_string()))?;
         let idx = Index { conn };
         idx.create_tables()?;
         Ok(idx)
@@ -83,9 +85,8 @@ impl Index {
 
     /// Index a single object (incremental update). Idempotent.
     pub fn index_object(&self, hash: &Hash, store: &ObjectStore) -> Result<()> {
-        let env = match store.read_raw(hash)? {
-            Some(e) => e,
-            None => return Ok(()),
+        let Some(env) = store.read_raw(hash)? else {
+            return Ok(());
         };
 
         match env.object_type {
@@ -207,7 +208,7 @@ impl Index {
 
     /// Find all Atoms of a given kind.
     pub fn atoms_by_kind(&self, kind: AtomKind) -> Result<Vec<Hash>> {
-        let kind_str = format!("{:?}", kind);
+        let kind_str = format!("{kind:?}");
         self.query_hashes(
             "SELECT hash FROM objects WHERE type_code = ?1 AND kind = ?2",
             params![ObjectType::Atom as u8, kind_str],
@@ -216,7 +217,7 @@ impl Index {
 
     /// Find all Frames of a given kind.
     pub fn frames_by_kind(&self, kind: FrameKind) -> Result<Vec<Hash>> {
-        let kind_str = format!("{:?}", kind);
+        let kind_str = format!("{kind:?}");
         self.query_hashes(
             "SELECT hash FROM objects WHERE type_code = ?1 AND kind = ?2",
             params![ObjectType::Frame as u8, kind_str],
@@ -225,7 +226,7 @@ impl Index {
 
     /// Find all Events of a given kind.
     pub fn events_by_kind(&self, kind: EventKind) -> Result<Vec<Hash>> {
-        let kind_str = format!("{:?}", kind);
+        let kind_str = format!("{kind:?}");
         self.query_hashes(
             "SELECT hash FROM events WHERE kind = ?1",
             params![kind_str],
@@ -272,7 +273,7 @@ impl Index {
         label: EdgeLabel,
     ) -> Result<Vec<Hash>> {
         let target_bytes = target.as_bytes().as_slice();
-        let label_str = format!("{:?}", label);
+        let label_str = format!("{label:?}");
         self.query_hashes(
             "SELECT source_hash FROM edges WHERE target_hash = ?1 AND label = ?2",
             params![target_bytes, label_str],
@@ -283,7 +284,7 @@ impl Index {
     pub fn recent_events(&self, n: usize, kind: Option<EventKind>) -> Result<Vec<Hash>> {
         match kind {
             Some(k) => {
-                let kind_str = format!("{:?}", k);
+                let kind_str = format!("{k:?}");
                 self.query_hashes(
                     "SELECT hash FROM events WHERE kind = ?1 ORDER BY timestamp DESC LIMIT ?2",
                     params![kind_str, n],
@@ -322,6 +323,7 @@ impl Index {
     }
 
     /// Count objects by type (for diagnostics).
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn object_counts(&self) -> Result<(usize, usize, usize)> {
         let atoms: i64 = self
             .conn
@@ -379,6 +381,9 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{
+        AtomContent, AtomMetadata, CallTrace, Edge, EventMetadata, FrameMetadata,
+    };
     use chrono::{DateTime, Utc};
     use tempfile::TempDir;
 
@@ -547,7 +552,7 @@ mod tests {
         let idx = Index::open_memory().unwrap();
 
         let a1 = store.write(&make_atom(AtomKind::ConceptDefinition, "one", vec![])).unwrap();
-        let a2 = store.write(&make_atom(AtomKind::LessonBody, "two", vec![])).unwrap();
+        let _a2 = store.write(&make_atom(AtomKind::LessonBody, "two", vec![])).unwrap();
         let f1 = store.write(&Frame {
             kind: FrameKind::Lesson,
             edges: vec![Edge { label: EdgeLabel::CoversConcept, target: a1, weight: None, annotation: None }],

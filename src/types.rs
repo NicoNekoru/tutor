@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash::Hash;
 
-/// Custom serde module: serializes serde_json::Value as a JSON string
+/// Custom serde module: serializes `serde_json::Value` as a JSON string
 /// in non-human-readable formats (bincode), and directly in human-readable
-/// formats (serde_json). Works around bincode's lack of deserialize_any.
+/// formats (`serde_json`). Works around bincode's lack of `deserialize_any`.
 mod json_value_compat {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -107,6 +107,7 @@ impl AtomMetadata {
         }
     }
 
+    #[must_use]
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
@@ -194,6 +195,7 @@ impl FrameMetadata {
         }
     }
 
+    #[must_use]
     pub fn with_label(mut self, label: impl Into<String>, in_hash: bool) -> Self {
         self.label = Some(label.into());
         self.label_in_hash = in_hash;

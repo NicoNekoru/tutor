@@ -29,7 +29,7 @@ impl ObjectEnvelope {
         buf.extend_from_slice(MAGIC);
         buf.push(self.version);
         buf.push(self.object_type as u8);
-        buf.push(if self.compressed { 1 } else { 0 });
+        buf.push(u8::from(self.compressed));
         buf.push(0); // reserved
         buf.extend_from_slice(&(self.content.len() as u64).to_le_bytes());
         buf.extend_from_slice(&self.content);
@@ -50,13 +50,13 @@ impl ObjectEnvelope {
         let version = data[4];
         if version != CURRENT_VERSION {
             return Err(Error::InvalidEnvelope(format!(
-                "unsupported version: {}",
-                version
+                "unsupported version: {version}",
             )));
         }
         let object_type = ObjectType::from_byte(data[5])
             .ok_or_else(|| Error::InvalidEnvelope(format!("unknown type: 0x{:02x}", data[5])))?;
         let compressed = data[6] & 1 != 0;
+        #[allow(clippy::cast_possible_truncation)]
         let content_len = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
         if data.len() < 16 + content_len {
             return Err(Error::InvalidEnvelope(format!(

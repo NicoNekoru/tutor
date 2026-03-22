@@ -34,7 +34,7 @@ impl Hash {
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(64);
         for byte in &self.0 {
-            s.push_str(&format!("{:02x}", byte));
+            s.push_str(&format!("{byte:02x}"));
         }
         s
     }

@@ -80,7 +80,7 @@ impl RefStore {
 
     /// Compare-and-swap: only update if the current value matches `expected`.
     /// Returns Ok(()) on success, Err(RefConflict) if the ref has changed.
-    /// If the ref doesn't exist and `expected` is Hash::zero(), creates it.
+    /// If the ref doesn't exist and `expected` is `Hash::zero()`, creates it.
     pub fn cas(&self, name: &str, expected: &Hash, new: &Hash) -> Result<()> {
         let current = self.read(name)?;
         let current_hash = current.unwrap_or_else(Hash::zero);
