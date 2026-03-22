@@ -135,8 +135,8 @@ cargo test                   # 69 tests: 66 unit + 3 integration
 uv venv .venv
 source .venv/bin/activate
 uv pip install maturin
-maturin develop              # builds Rust + pybridge → installs as Python native module
-python tests/test_python.py  # 12 tests
+uv run maturin develop          # builds Rust + pybridge → installs as Python native module
+uv python tests/test_python.py  # 12 tests
 ```
 
 ### Project layout
