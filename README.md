@@ -1297,16 +1297,197 @@ print(f"Removed {report.removed_count} unreachable objects")
 
 ---
 
-## 13. Open Questions
+## 14. Plumbing-First Policy
+1. The core store must remain boring, deterministic, and inspectable.
+2. Derived data must never be required for correctness.
+3. Mutable state must be minimized and made explicit.
+4. Expensive or complex features should live at the edges, not in the storage model.
+5. Optimize after real pain is observed, not before.
 
-1. **Embedding generation:** Should embeddings be computed at write time (eager) or query time (lazy)? Eager is simpler but requires a model available at every write. Lazy defers cost but complicates the retrieval hot path.
+### 14.1 Resolution: Embeddings Are Derived, Optional, and Out-of-Band
+Embeddings SHALL be treated as derived index data, not as part of object identity and not as a prerequisite for object writes.
 
-2. **Large binary content:** If Atoms contain images, audio, or video (e.g., a diagram in a lesson), should the binary payload be stored inline in the object or as a separate blob with a reference? Git uses the inline approach; Git LFS uses the reference approach. For a tutoring system, most content is text, but multimedia support matters eventually.
+#### Policy
+- `Workspace::put` MUST succeed without requiring embedding generation.
+- Embeddings MUST NOT participate in object hashing.
+- Embeddings MUST be stored only in the secondary index layer or another rebuildable derived-data layer.
+- Missing embeddings MUST NOT prevent retrieval; retrieval SHALL fall back to non-embedding strategies.
+- Embedding generation SHOULD occur asynchronously after object creation, either:
+  - eagerly but out-of-band via a background worker, or
+  - lazily on first semantic query.
 
-3. **Concurrent access:** The current design assumes single-writer (one tutoring session at a time). If multiple sessions or multiple students share a workspace, ref contention becomes an issue. The `cas` method on refs handles the mechanics, but the merge semantics for concurrent student model updates need design.
+#### Consequences
+- The Rust core remains self-contained and deterministic.
+- The workspace can be written and inspected without network access or model availability.
+- Embedding generation failures degrade retrieval quality, not system correctness.
 
-4. **Embedding index scaling:** Brute-force nearest-neighbor search in SQLite works for small corpora (< 100K atoms). For larger corpora, an approximate nearest-neighbor index (HNSW via `sqlite-vss`, or a dedicated vector store) would be needed.
+#### Rationale
+The object store is the source of truth. Embeddings are a convenience index. The storage engine should not require an ML model in the write path.
 
-5. **Model interaction protocol rigidity:** The structured output protocol (subcall/mastery_update/retrieve XML blocks) couples the model's output format to the engine's parser. Alternative: use tool-use / function-calling APIs natively, mapping each operation to a tool. This is more robust but ties the system to models that support structured tool use.
+---
 
-6. **Ref semantics for multi-student deployments:** If the workspace represents a course (not a student), then student models should probably live in separate ref namespaces per student (`student/{student_id}/mastery`), and the course structure refs are shared read-only. This changes the scoping model.
+### 14.2 Resolution: Large Binary Content Is Stored Inline in v1
+Binary payloads SHALL be stored inline in Atoms in the initial design.
+
+#### Policy
+- `AtomContent.binary` remains part of the stored object body in v1.
+- The hash MUST continue to cover the raw binary bytes.
+- The object model SHALL NOT introduce a separate large-file indirection mechanism in v1.
+- The implementation MAY emit warnings or metrics for unusually large objects.
+- A future external-blob mechanism MAY be added later, but only as an extension driven by demonstrated operational need.
+
+#### Consequences
+- The storage model remains uniform: all content is content-addressed and immutable.
+- Inspection, export, import, and GC remain conceptually simple.
+- Large media support is available immediately, even if not yet optimized.
+
+#### Rationale
+Most tutoring content is text. A separate LFS-style mechanism would add complexity before there is evidence that large binaries are a real problem.
+
+---
+
+### 14.3 Resolution: Concurrency Is Managed at Refs, Not by Making Objects Mutable
+The system SHALL continue to use immutable object writes and mutable refs as the only synchronization point.
+
+#### Policy
+- Object writes MUST remain append-only and idempotent.
+- Ref updates MUST be atomic.
+- Compare-and-swap (`cas`) MUST be the primitive for safe concurrent ref updates.
+- Concurrent updates that produce divergent immutable objects SHALL be represented explicitly and resolved by merge logic at the application layer.
+- The Rust core SHALL NOT attempt to provide implicit semantic conflict resolution for student-model updates.
+- Multi-step state changes involving multiple refs SHOULD be modeled as:
+  1. write immutable objects first,
+  2. record an Event,
+  3. update the relevant ref(s) using CAS.
+
+#### Consequences
+- Concurrent writers do not corrupt stored objects.
+- Ref contention is explicit and recoverable.
+- Merge semantics remain domain-specific and observable through Events.
+
+#### Rationale
+Concurrency should be concentrated in the smallest possible mutable surface. Immutable objects are easy to reason about; mutable semantic state is not.
+
+---
+
+### 14.4 Resolution: The Default Embedding Index Is Simple, Swappable, and Non-Core
+The initial embedding index SHALL use a simple brute-force implementation, with a clean abstraction boundary so that faster backends can be introduced later.
+
+#### Policy
+- SQLite-based brute-force nearest-neighbor search is the default implementation.
+- The object store and graph model MUST remain independent of the embedding backend.
+- The index layer SHOULD expose a backend abstraction so that future implementations can replace the default without changing callers.
+- Approximate nearest-neighbor infrastructure MUST remain optional and non-core until performance data justifies it.
+
+#### Consequences
+- Small and medium workspaces remain easy to deploy.
+- The project avoids premature dependency on specialized vector infrastructure.
+- Scaling can be addressed later without redesigning the object model.
+
+#### Rationale
+A simple implementation that is correct and replaceable is preferable to a complex implementation justified only by hypothetical scale.
+
+---
+
+### 14.5 Resolution: The Execution Engine Uses Structured Commands, Not Prompt-Scraped Markup
+The execution engine SHALL use a typed internal command representation. Free-text markup embedded in natural language SHALL NOT be the normative protocol.
+
+#### Policy
+- The execution engine MUST define an internal structured command schema for operations such as:
+  - sub-call requests,
+  - mastery updates,
+  - retrieval requests,
+  - merge requests.
+- For providers supporting tool/function calling, adapters SHOULD map provider-native tool calls into the internal command schema.
+- For providers without tool calling, the fallback protocol SHOULD be strict JSON, not ad hoc XML-like tags in free text.
+- Parsing natural-language output for control instructions SHOULD be treated only as a last-resort compatibility mode.
+- The Rust core SHALL remain unaware of model protocol details.
+
+#### Consequences
+- The machine interface becomes more robust and testable.
+- Provider-specific quirks are isolated in adapters.
+- The object model does not become coupled to a transient prompt format.
+
+#### Rationale
+If the machine needs structure, the protocol should provide structure directly.
+
+---
+
+### 14.6 Resolution: Shared Course Content and Per-Student Mutable State Are Separated
+The logical model SHALL distinguish between shared immutable course content and per-student mutable state.
+
+#### Policy
+- Course structure refs (`course/...`) SHALL be treated as shared and effectively read-only during tutoring operation.
+- Student state SHALL live in per-student namespaces, e.g.:
+  - `student/{student_id}/mastery`
+  - `student/{student_id}/session/current`
+  - `student/{student_id}/session/{session_id}`
+- The implementation SHOULD assume a single active writer per student namespace.
+- Cross-student mutation of shared refs MUST be avoided during normal tutoring flows.
+- A future deployment mode MAY further separate student state into overlays or per-student workspaces, but the logical separation is required now even if the physical store is shared.
+
+#### Consequences
+- Shared curriculum data is stable.
+- Student-specific contention is localized.
+- Multi-student deployments do not force global mutable coordination.
+
+#### Rationale
+The course is shared infrastructure. The student model is local evolving state. These should not be treated as the same kind of mutable thing.
+
+---
+
+## 14.7 Implementation Guidance
+The following implementation choices follow directly from the above resolutions:
+
+### Core Rust layer
+The Rust core SHOULD contain only:
+- object serialization and hashing,
+- object storage and retrieval,
+- ref operations,
+- graph traversal,
+- rebuildable indexes,
+- scoped views,
+- export/import,
+- garbage collection.
+
+The Rust core SHOULD NOT contain:
+- embedding generation,
+- vector-model dependencies,
+- retrieval-policy logic,
+- model-specific parsing logic,
+- provider-specific tool protocols,
+- tutoring pedagogy.
+
+### Python layer
+The Python layer SHOULD contain:
+- retrieval policies,
+- embedding generation jobs,
+- execution orchestration,
+- model-provider adapters,
+- structured command parsing,
+- student-model update policy,
+- merge policy.
+This preserves a clean plumbing/porcelain split.
+
+---
+
+## 14.8 Non-Goals for v1
+The following are explicitly out of scope for the first implementation:
+1. Requiring embeddings for correctness.
+2. Adding a specialized large-file storage protocol before large binaries are proven problematic.
+3. Building distributed locking or multi-writer transactional semantics into the core.
+4. Making the object model depend on a vector database.
+5. Making XML-like prompt markup the canonical execution protocol.
+6. Treating all students as writers to one shared mutable tutoring state.
+
+---
+
+## 14.9 Summary of Final Decisions
+| Question | Resolution |
+|---|---|
+| Embeddings eager vs lazy | Derived and out-of-band; writes never depend on them |
+| Large binary content | Inline in v1 |
+| Concurrent access | Immutable objects + CAS refs + explicit merges |
+| Embedding index scaling | SQLite brute-force first; backend swappable |
+| Model interaction protocol | Internal typed commands; tool use or strict JSON preferred |
+| Multi-student deployment | Shared course content, per-student mutable namespaces |
