@@ -11,8 +11,7 @@ The Rust core provides the storage engine. Python bindings (via PyO3) expose the
 ```bash
 # Requires: Rust toolchain (rustup), Python 3.9+, uv
 git clone <repo> && cd rlm-ws
-uv venv .venv
-source .venv/bin/activate    # or: . .venv/bin/activate
+uv sync
 uv pip install maturin
 uv run maturin develop
 ```
@@ -132,11 +131,10 @@ cargo clippy --all-targets   # must be zero warnings (deny(warnings) is set)
 cargo test                   # 69 tests: 66 unit + 3 integration
 
 # Python: venv, build, test (maturin activates the "python" feature automatically)
-uv venv .venv
-source .venv/bin/activate
+uv sync
 uv pip install maturin
 uv run maturin develop          # builds Rust + pybridge → installs as Python native module
-uv python tests/test_python.py  # 12 tests
+uv run python tests/test_python.py  # 12 tests
 ```
 
 ### Project layout
