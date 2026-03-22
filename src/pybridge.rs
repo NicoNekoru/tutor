@@ -680,7 +680,11 @@ impl PyWorkspace {
     }
 
     #[pyo3(signature = (root, kind=None))]
-    fn collect_frames(&self, root: &PyHash, kind: Option<&str>) -> PyResult<Vec<(PyHash, PyFrame)>> {
+    fn collect_frames(
+        &self,
+        root: &PyHash,
+        kind: Option<&str>,
+    ) -> PyResult<Vec<(PyHash, PyFrame)>> {
         let graph = self.inner.graph();
         let filter = match kind {
             Some(k) => Some(vec![parse_frame_kind(k)?]),
@@ -710,50 +714,95 @@ impl PyWorkspace {
 
     fn student_mastery_map(&self, model_hash: &PyHash) -> PyResult<Vec<(PyHash, f64)>> {
         let graph = self.inner.graph();
-        let results = graph.student_mastery_map(&model_hash.inner).map_err(to_pyerr)?;
-        Ok(results.into_iter().map(|(h, w)| (PyHash { inner: h }, w)).collect())
+        let results = graph
+            .student_mastery_map(&model_hash.inner)
+            .map_err(to_pyerr)?;
+        Ok(results
+            .into_iter()
+            .map(|(h, w)| (PyHash { inner: h }, w))
+            .collect())
     }
 
-    fn shortest_path(&self, from: &PyHash, to: &PyHash, max_depth: usize) -> PyResult<Option<Vec<PyHash>>> {
+    fn shortest_path(
+        &self,
+        from: &PyHash,
+        to: &PyHash,
+        max_depth: usize,
+    ) -> PyResult<Option<Vec<PyHash>>> {
         let graph = self.inner.graph();
-        let path = graph.shortest_path(&from.inner, &to.inner, max_depth).map_err(to_pyerr)?;
+        let path = graph
+            .shortest_path(&from.inner, &to.inner, max_depth)
+            .map_err(to_pyerr)?;
         Ok(path.map(|p| p.into_iter().map(|h| PyHash { inner: h }).collect()))
     }
 
     fn session_events(&self, session_tip: &PyHash) -> PyResult<Vec<(PyHash, PyEvent)>> {
         let graph = self.inner.graph();
         let results = graph.session_events(&session_tip.inner).map_err(to_pyerr)?;
-        Ok(results.into_iter().map(|(h, e)| (PyHash { inner: h }, PyEvent { inner: e })).collect())
+        Ok(results
+            .into_iter()
+            .map(|(h, e)| (PyHash { inner: h }, PyEvent { inner: e }))
+            .collect())
     }
 
     // --- Index ---
 
     fn atoms_by_kind(&self, kind: &str) -> PyResult<Vec<PyHash>> {
         let k = parse_atom_kind(kind)?;
-        Ok(self.inner.index.atoms_by_kind(k).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .atoms_by_kind(k)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     fn frames_by_kind(&self, kind: &str) -> PyResult<Vec<PyHash>> {
         let k = parse_frame_kind(kind)?;
-        Ok(self.inner.index.frames_by_kind(k).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .frames_by_kind(k)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     fn events_by_kind(&self, kind: &str) -> PyResult<Vec<PyHash>> {
         let k = parse_event_kind(kind)?;
-        Ok(self.inner.index.events_by_kind(k).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .events_by_kind(k)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     fn by_tag(&self, tag: &str) -> PyResult<Vec<PyHash>> {
-        Ok(self.inner.index.by_tag(tag).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .by_tag(tag)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     fn reverse_edges(&self, target: &PyHash) -> PyResult<Vec<(PyHash, String)>> {
-        Ok(self.inner.index.reverse_edges(&target.inner).map_err(to_pyerr)?
-            .into_iter().map(|(h, l)| (PyHash { inner: h }, l)).collect())
+        Ok(self
+            .inner
+            .index
+            .reverse_edges(&target.inner)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|(h, l)| (PyHash { inner: h }, l))
+            .collect())
     }
 
     #[pyo3(signature = (n, kind=None))]
@@ -762,13 +811,25 @@ impl PyWorkspace {
             Some(s) => Some(parse_event_kind(s)?),
             None => None,
         };
-        Ok(self.inner.index.recent_events(n, k).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .recent_events(n, k)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     fn events_in_range(&self, after: &str, before: &str) -> PyResult<Vec<PyHash>> {
-        Ok(self.inner.index.events_in_range(after, before).map_err(to_pyerr)?
-            .into_iter().map(|h| PyHash { inner: h }).collect())
+        Ok(self
+            .inner
+            .index
+            .events_in_range(after, before)
+            .map_err(to_pyerr)?
+            .into_iter()
+            .map(|h| PyHash { inner: h })
+            .collect())
     }
 
     // --- Maintenance ---
@@ -784,7 +845,9 @@ impl PyWorkspace {
 
     fn export_json(&self, root: &PyHash) -> PyResult<String> {
         let mut buf = Vec::new();
-        self.inner.export_json(&root.inner, &mut buf).map_err(to_pyerr)?;
+        self.inner
+            .export_json(&root.inner, &mut buf)
+            .map_err(to_pyerr)?;
         String::from_utf8(buf).map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
@@ -899,7 +962,8 @@ fn pythonize_dict_to_json(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<
 /// Convert a `serde_json::Value` to a Python object.
 fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     let json_mod = py.import("json")?;
-    let json_str = serde_json::to_string(value).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let json_str =
+        serde_json::to_string(value).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let result = json_mod.call_method1("loads", (json_str,))?;
     Ok(result.unbind())
 }

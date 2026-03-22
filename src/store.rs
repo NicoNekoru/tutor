@@ -33,10 +33,8 @@ impl ObjectStore {
 
     /// Ensure required directories exist.
     pub fn init_dirs(&self) -> Result<()> {
-        fs::create_dir_all(&self.objects_dir)
-            .map_err(|e| Error::io(e, &self.objects_dir))?;
-        fs::create_dir_all(&self.tmp_dir)
-            .map_err(|e| Error::io(e, &self.tmp_dir))?;
+        fs::create_dir_all(&self.objects_dir).map_err(|e| Error::io(e, &self.objects_dir))?;
+        fs::create_dir_all(&self.tmp_dir).map_err(|e| Error::io(e, &self.tmp_dir))?;
         Ok(())
     }
 
@@ -265,7 +263,10 @@ mod tests {
         let atom = make_atom("test");
         let h1 = store.write(&atom).unwrap();
         let h2 = store.write(&atom).unwrap();
-        assert_eq!(h1, h2, "Writing the same object twice must return the same hash");
+        assert_eq!(
+            h1, h2,
+            "Writing the same object twice must return the same hash"
+        );
     }
 
     #[test]
@@ -438,6 +439,9 @@ mod tests {
         assert!(reachable.contains(&course_h));
         assert!(reachable.contains(&lh));
         assert!(reachable.contains(&ch));
-        assert!(!reachable.contains(&orphan_h), "Orphan should not be reachable");
+        assert!(
+            !reachable.contains(&orphan_h),
+            "Orphan should not be reachable"
+        );
     }
 }

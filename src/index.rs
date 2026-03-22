@@ -6,9 +6,7 @@ use crate::envelope::Storable;
 use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::store::ObjectStore;
-use crate::types::{
-    Atom, AtomKind, EdgeLabel, Event, EventKind, Frame, FrameKind, ObjectType,
-};
+use crate::types::{Atom, AtomKind, EdgeLabel, Event, EventKind, Frame, FrameKind, ObjectType};
 
 /// Secondary indexes backed by `SQLite`.
 ///
@@ -24,8 +22,7 @@ impl Index {
         let index_dir = rlm_root.join("index");
         std::fs::create_dir_all(&index_dir).map_err(|e| Error::io(e, &index_dir))?;
         let db_path = index_dir.join("index.sqlite3");
-        let conn =
-            Connection::open(db_path).map_err(|e| Error::Serialization(e.to_string()))?;
+        let conn = Connection::open(db_path).map_err(|e| Error::Serialization(e.to_string()))?;
         let idx = Index { conn };
         idx.create_tables()?;
         Ok(idx)
@@ -173,7 +170,11 @@ impl Index {
         let hash_bytes = hash.as_bytes().as_slice();
         let kind = format!("{:?}", event.kind);
         let timestamp = event.metadata.timestamp.to_rfc3339();
-        let parent_call = event.trace.parent_call.as_ref().map(|h| h.as_bytes().to_vec());
+        let parent_call = event
+            .trace
+            .parent_call
+            .as_ref()
+            .map(|h| h.as_bytes().to_vec());
 
         self.conn
             .execute(
@@ -227,10 +228,7 @@ impl Index {
     /// Find all Events of a given kind.
     pub fn events_by_kind(&self, kind: EventKind) -> Result<Vec<Hash>> {
         let kind_str = format!("{kind:?}");
-        self.query_hashes(
-            "SELECT hash FROM events WHERE kind = ?1",
-            params![kind_str],
-        )
+        self.query_hashes("SELECT hash FROM events WHERE kind = ?1", params![kind_str])
     }
 
     /// Find all objects with a given tag.
@@ -267,11 +265,7 @@ impl Index {
     }
 
     /// Reverse edge lookup filtered by label.
-    pub fn reverse_edges_by_label(
-        &self,
-        target: &Hash,
-        label: EdgeLabel,
-    ) -> Result<Vec<Hash>> {
+    pub fn reverse_edges_by_label(&self, target: &Hash, label: EdgeLabel) -> Result<Vec<Hash>> {
         let target_bytes = target.as_bytes().as_slice();
         let label_str = format!("{label:?}");
         self.query_hashes(
@@ -383,9 +377,7 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{
-        AtomContent, AtomMetadata, CallTrace, Edge, EventMetadata, FrameMetadata,
-    };
+    use crate::types::{AtomContent, AtomMetadata, CallTrace, Edge, EventMetadata, FrameMetadata};
     use chrono::{DateTime, Utc};
     use tempfile::TempDir;
 
@@ -405,7 +397,10 @@ mod tests {
         Atom {
             kind,
             content: AtomContent::text(text),
-            metadata: AtomMetadata { created_at: fixed_ts(), tags },
+            metadata: AtomMetadata {
+                created_at: fixed_ts(),
+                tags,
+            },
         }
     }
 
@@ -423,9 +418,21 @@ mod tests {
         let (_dir, store) = setup_store();
         let idx = Index::open_memory().unwrap();
 
-        let a1 = make_atom(AtomKind::ConceptDefinition, "binary search", vec!["algo".into()]);
-        let a2 = make_atom(AtomKind::ConceptDefinition, "linear search", vec!["algo".into()]);
-        let a3 = make_atom(AtomKind::ProblemStatement, "find element", vec!["practice".into()]);
+        let a1 = make_atom(
+            AtomKind::ConceptDefinition,
+            "binary search",
+            vec!["algo".into()],
+        );
+        let a2 = make_atom(
+            AtomKind::ConceptDefinition,
+            "linear search",
+            vec!["algo".into()],
+        );
+        let a3 = make_atom(
+            AtomKind::ProblemStatement,
+            "find element",
+            vec!["practice".into()],
+        );
         let h1 = store.write(&a1).unwrap();
         let h2 = store.write(&a2).unwrap();
         let h3 = store.write(&a3).unwrap();
@@ -455,19 +462,43 @@ mod tests {
         let (_dir, store) = setup_store();
         let idx = Index::open_memory().unwrap();
 
-        let c1 = store.write(&make_atom(AtomKind::ConceptDefinition, "concept A", vec![])).unwrap();
-        let c2 = store.write(&make_atom(AtomKind::ConceptDefinition, "concept B", vec![])).unwrap();
+        let c1 = store
+            .write(&make_atom(AtomKind::ConceptDefinition, "concept A", vec![]))
+            .unwrap();
+        let c2 = store
+            .write(&make_atom(AtomKind::ConceptDefinition, "concept B", vec![]))
+            .unwrap();
         idx.index_object(&c1, &store).unwrap();
         idx.index_object(&c2, &store).unwrap();
 
         let frame = Frame {
             kind: FrameKind::Lesson,
             edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: c1, weight: None, annotation: None },
-                Edge { label: EdgeLabel::CoversConcept, target: c2, weight: None, annotation: None },
-                Edge { label: EdgeLabel::Prerequisite, target: Hash::compute(b"other lesson"), weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c1,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c2,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::Prerequisite,
+                    target: Hash::compute(b"other lesson"),
+                    weight: None,
+                    annotation: None,
+                },
             ],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: Some("test-lesson".into()), label_in_hash: true },
+            metadata: FrameMetadata {
+                created_at: fixed_ts(),
+                tags: vec![],
+                label: Some("test-lesson".into()),
+                label_in_hash: true,
+            },
         };
         let fh = store.write(&frame).unwrap();
         idx.index_object(&fh, &store).unwrap();
@@ -479,9 +510,13 @@ mod tests {
         assert_eq!(rev[0].1, "CoversConcept");
 
         // Reverse edges by label
-        let rev_concept = idx.reverse_edges_by_label(&c1, EdgeLabel::CoversConcept).unwrap();
+        let rev_concept = idx
+            .reverse_edges_by_label(&c1, EdgeLabel::CoversConcept)
+            .unwrap();
         assert_eq!(rev_concept.len(), 1);
-        let rev_prereq = idx.reverse_edges_by_label(&c1, EdgeLabel::Prerequisite).unwrap();
+        let rev_prereq = idx
+            .reverse_edges_by_label(&c1, EdgeLabel::Prerequisite)
+            .unwrap();
         assert_eq!(rev_prereq.len(), 0);
 
         // Frame kind query
@@ -496,27 +531,53 @@ mod tests {
 
         let e1 = Event {
             kind: EventKind::SessionStart,
-            parents: vec![], inputs: vec![], outputs: vec![],
+            parents: vec![],
+            inputs: vec![],
+            outputs: vec![],
             trace: CallTrace::empty(),
-            metadata: EventMetadata { timestamp: ts("2026-03-20T10:00:00Z"), tags: vec![] },
+            metadata: EventMetadata {
+                timestamp: ts("2026-03-20T10:00:00Z"),
+                tags: vec![],
+            },
         };
         let e2 = Event {
             kind: EventKind::ModelCall,
-            parents: vec![], inputs: vec![], outputs: vec![],
-            trace: CallTrace { call_depth: 0, ..CallTrace::empty() },
-            metadata: EventMetadata { timestamp: ts("2026-03-20T10:05:00Z"), tags: vec![] },
+            parents: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            trace: CallTrace {
+                call_depth: 0,
+                ..CallTrace::empty()
+            },
+            metadata: EventMetadata {
+                timestamp: ts("2026-03-20T10:05:00Z"),
+                tags: vec![],
+            },
         };
         let e3 = Event {
             kind: EventKind::ModelCall,
-            parents: vec![], inputs: vec![], outputs: vec![],
-            trace: CallTrace { call_depth: 1, ..CallTrace::empty() },
-            metadata: EventMetadata { timestamp: ts("2026-03-20T10:10:00Z"), tags: vec![] },
+            parents: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            trace: CallTrace {
+                call_depth: 1,
+                ..CallTrace::empty()
+            },
+            metadata: EventMetadata {
+                timestamp: ts("2026-03-20T10:10:00Z"),
+                tags: vec![],
+            },
         };
         let e4 = Event {
             kind: EventKind::SessionEnd,
-            parents: vec![], inputs: vec![], outputs: vec![],
+            parents: vec![],
+            inputs: vec![],
+            outputs: vec![],
             trace: CallTrace::empty(),
-            metadata: EventMetadata { timestamp: ts("2026-03-20T10:15:00Z"), tags: vec![] },
+            metadata: EventMetadata {
+                timestamp: ts("2026-03-20T10:15:00Z"),
+                tags: vec![],
+            },
         };
 
         let h1 = store.write(&e1).unwrap();
@@ -544,7 +605,9 @@ mod tests {
         assert_eq!(recent_calls[0], h3);
 
         // Time range
-        let range = idx.events_in_range("2026-03-20T10:03:00Z", "2026-03-20T10:12:00Z").unwrap();
+        let range = idx
+            .events_in_range("2026-03-20T10:03:00Z", "2026-03-20T10:12:00Z")
+            .unwrap();
         assert_eq!(range.len(), 2); // e2 and e3
     }
 
@@ -553,13 +616,29 @@ mod tests {
         let (_dir, store) = setup_store();
         let idx = Index::open_memory().unwrap();
 
-        let a1 = store.write(&make_atom(AtomKind::ConceptDefinition, "one", vec![])).unwrap();
-        let _a2 = store.write(&make_atom(AtomKind::LessonBody, "two", vec![])).unwrap();
-        let f1 = store.write(&Frame {
-            kind: FrameKind::Lesson,
-            edges: vec![Edge { label: EdgeLabel::CoversConcept, target: a1, weight: None, annotation: None }],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: None, label_in_hash: false },
-        }).unwrap();
+        let a1 = store
+            .write(&make_atom(AtomKind::ConceptDefinition, "one", vec![]))
+            .unwrap();
+        let _a2 = store
+            .write(&make_atom(AtomKind::LessonBody, "two", vec![]))
+            .unwrap();
+        let f1 = store
+            .write(&Frame {
+                kind: FrameKind::Lesson,
+                edges: vec![Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: a1,
+                    weight: None,
+                    annotation: None,
+                }],
+                metadata: FrameMetadata {
+                    created_at: fixed_ts(),
+                    tags: vec![],
+                    label: None,
+                    label_in_hash: false,
+                },
+            })
+            .unwrap();
 
         let count = idx.rebuild(&store).unwrap();
         assert_eq!(count, 3);
@@ -584,7 +663,11 @@ mod tests {
         let (_dir, store) = setup_store();
         let idx = Index::open_memory().unwrap();
 
-        let a = make_atom(AtomKind::ConceptDefinition, "idempotent", vec!["test".into()]);
+        let a = make_atom(
+            AtomKind::ConceptDefinition,
+            "idempotent",
+            vec!["test".into()],
+        );
         let h = store.write(&a).unwrap();
 
         // Index twice — should not duplicate.

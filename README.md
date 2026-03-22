@@ -14,7 +14,7 @@ git clone <repo> && cd rlm-ws
 uv venv .venv
 source .venv/bin/activate    # or: . .venv/bin/activate
 uv pip install maturin
-maturin develop
+uv run maturin develop
 ```
 
 ```python
@@ -127,15 +127,15 @@ The Python layer (to be built on top of this crate) handles retrieval strategies
 # Clone and enter the project
 git clone <repo> && cd rlm-ws
 
-# Rust: check, lint, test
+# Rust: check, lint, test (no Python needed — pybridge is feature-gated)
 cargo clippy --all-targets   # must be zero warnings (deny(warnings) is set)
 cargo test                   # 69 tests: 66 unit + 3 integration
 
-# Python: venv, build, test
+# Python: venv, build, test (maturin activates the "python" feature automatically)
 uv venv .venv
 source .venv/bin/activate
 uv pip install maturin
-maturin develop              # builds Rust → installs as Python native module
+maturin develop              # builds Rust + pybridge → installs as Python native module
 python tests/test_python.py  # 12 tests
 ```
 

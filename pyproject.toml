@@ -9,4 +9,4 @@ description = "Content-addressable object store for RLM workspaces"
 requires-python = ">=3.9"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["python"]

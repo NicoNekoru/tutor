@@ -4,9 +4,7 @@ use crate::envelope::Storable;
 use crate::error::Result;
 use crate::hash::Hash;
 use crate::store::ObjectStore;
-use crate::types::{
-    Atom, AtomKind, Edge, EdgeLabel, Event, Frame, FrameKind, ObjectType,
-};
+use crate::types::{Atom, AtomKind, Edge, EdgeLabel, Event, Frame, FrameKind, ObjectType};
 
 /// Traversal direction for graph walks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,10 +243,7 @@ impl<'a> Graph<'a> {
 
     /// Find all concept atoms that a `StudentModel` frame tracks mastery for.
     /// Returns (`concept_hash`, `mastery_level`) pairs.
-    pub fn student_mastery_map(
-        &self,
-        student_model_hash: &Hash,
-    ) -> Result<Vec<(Hash, f64)>> {
+    pub fn student_mastery_map(&self, student_model_hash: &Hash) -> Result<Vec<(Hash, f64)>> {
         let Some(frame) = self.store.read::<Frame>(student_model_hash)? else {
             return Ok(Vec::new());
         };
@@ -356,8 +351,8 @@ mod tests {
         AtomContent, AtomMetadata, CallTrace, EventKind, EventMetadata, EventRef, FrameMetadata,
     };
     use chrono::{DateTime, Utc};
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     fn fixed_ts() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -369,7 +364,10 @@ mod tests {
         Atom {
             kind: AtomKind::ConceptDefinition,
             content: AtomContent::text(text),
-            metadata: AtomMetadata { created_at: fixed_ts(), tags: vec![] },
+            metadata: AtomMetadata {
+                created_at: fixed_ts(),
+                tags: vec![],
+            },
         }
     }
 
@@ -377,7 +375,10 @@ mod tests {
         Atom {
             kind: AtomKind::ProblemStatement,
             content: AtomContent::text(text),
-            metadata: AtomMetadata { created_at: fixed_ts(), tags: vec![] },
+            metadata: AtomMetadata {
+                created_at: fixed_ts(),
+                tags: vec![],
+            },
         }
     }
 
@@ -403,38 +404,90 @@ mod tests {
         let c_arrays = store.write(&make_concept("arrays")).unwrap();
         let c_binary = store.write(&make_concept("binary search")).unwrap();
         let c_sorted = store.write(&make_concept("sorted arrays")).unwrap();
-        let p_find = store.write(&make_problem("find element in sorted array")).unwrap();
+        let p_find = store
+            .write(&make_problem("find element in sorted array"))
+            .unwrap();
 
-        let lesson_arrays = store.write(&Frame {
-            kind: FrameKind::Lesson,
-            edges: vec![Edge {
-                label: EdgeLabel::CoversConcept, target: c_arrays,
-                weight: None, annotation: None,
-            }],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: Some("arrays".into()), label_in_hash: true },
-        }).unwrap();
+        let lesson_arrays = store
+            .write(&Frame {
+                kind: FrameKind::Lesson,
+                edges: vec![Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c_arrays,
+                    weight: None,
+                    annotation: None,
+                }],
+                metadata: FrameMetadata {
+                    created_at: fixed_ts(),
+                    tags: vec![],
+                    label: Some("arrays".into()),
+                    label_in_hash: true,
+                },
+            })
+            .unwrap();
 
-        let lesson_bs = store.write(&Frame {
-            kind: FrameKind::Lesson,
-            edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: c_binary, weight: None, annotation: None },
-                Edge { label: EdgeLabel::CoversConcept, target: c_sorted, weight: None, annotation: None },
-                Edge { label: EdgeLabel::IncludesProblem, target: p_find, weight: None, annotation: None },
-                Edge { label: EdgeLabel::Prerequisite, target: lesson_arrays, weight: None, annotation: None },
-            ],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: Some("binary-search".into()), label_in_hash: true },
-        }).unwrap();
+        let lesson_bs = store
+            .write(&Frame {
+                kind: FrameKind::Lesson,
+                edges: vec![
+                    Edge {
+                        label: EdgeLabel::CoversConcept,
+                        target: c_binary,
+                        weight: None,
+                        annotation: None,
+                    },
+                    Edge {
+                        label: EdgeLabel::CoversConcept,
+                        target: c_sorted,
+                        weight: None,
+                        annotation: None,
+                    },
+                    Edge {
+                        label: EdgeLabel::IncludesProblem,
+                        target: p_find,
+                        weight: None,
+                        annotation: None,
+                    },
+                    Edge {
+                        label: EdgeLabel::Prerequisite,
+                        target: lesson_arrays,
+                        weight: None,
+                        annotation: None,
+                    },
+                ],
+                metadata: FrameMetadata {
+                    created_at: fixed_ts(),
+                    tags: vec![],
+                    label: Some("binary-search".into()),
+                    label_in_hash: true,
+                },
+            })
+            .unwrap();
 
-        let course = store.write(&Frame {
-            kind: FrameKind::Course,
-            edges: vec![Edge {
-                label: EdgeLabel::Contains, target: lesson_bs,
-                weight: None, annotation: None,
-            }],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: None, label_in_hash: false },
-        }).unwrap();
+        let course = store
+            .write(&Frame {
+                kind: FrameKind::Course,
+                edges: vec![Edge {
+                    label: EdgeLabel::Contains,
+                    target: lesson_bs,
+                    weight: None,
+                    annotation: None,
+                }],
+                metadata: FrameMetadata {
+                    created_at: fixed_ts(),
+                    tags: vec![],
+                    label: None,
+                    label_in_hash: false,
+                },
+            })
+            .unwrap();
 
-        (course, lesson_bs, lesson_arrays, vec![c_arrays, c_binary, c_sorted, p_find])
+        (
+            course,
+            lesson_bs,
+            lesson_arrays,
+            vec![c_arrays, c_binary, c_sorted, p_find],
+        )
     }
 
     #[test]
@@ -444,7 +497,11 @@ mod tests {
         let graph = Graph::new(&store);
 
         let atoms = graph.collect_atoms(&course, None).unwrap();
-        assert_eq!(atoms.len(), 4, "Should find all 4 atoms (3 concepts + 1 problem)");
+        assert_eq!(
+            atoms.len(),
+            4,
+            "Should find all 4 atoms (3 concepts + 1 problem)"
+        );
     }
 
     #[test]
@@ -453,13 +510,19 @@ mod tests {
         let (course, _, _, _) = build_test_course(&store);
         let graph = Graph::new(&store);
 
-        let concepts = graph.collect_atoms(&course, Some(&[AtomKind::ConceptDefinition])).unwrap();
+        let concepts = graph
+            .collect_atoms(&course, Some(&[AtomKind::ConceptDefinition]))
+            .unwrap();
         assert_eq!(concepts.len(), 3);
 
-        let problems = graph.collect_atoms(&course, Some(&[AtomKind::ProblemStatement])).unwrap();
+        let problems = graph
+            .collect_atoms(&course, Some(&[AtomKind::ProblemStatement]))
+            .unwrap();
         assert_eq!(problems.len(), 1);
 
-        let examples = graph.collect_atoms(&course, Some(&[AtomKind::WorkedExample])).unwrap();
+        let examples = graph
+            .collect_atoms(&course, Some(&[AtomKind::WorkedExample]))
+            .unwrap();
         assert_eq!(examples.len(), 0);
     }
 
@@ -472,10 +535,14 @@ mod tests {
         let all_frames = graph.collect_frames(&course, None).unwrap();
         assert_eq!(all_frames.len(), 3, "Course + 2 lessons");
 
-        let lessons = graph.collect_frames(&course, Some(&[FrameKind::Lesson])).unwrap();
+        let lessons = graph
+            .collect_frames(&course, Some(&[FrameKind::Lesson]))
+            .unwrap();
         assert_eq!(lessons.len(), 2);
 
-        let courses = graph.collect_frames(&course, Some(&[FrameKind::Course])).unwrap();
+        let courses = graph
+            .collect_frames(&course, Some(&[FrameKind::Course]))
+            .unwrap();
         assert_eq!(courses.len(), 1);
     }
 
@@ -499,10 +566,14 @@ mod tests {
         let all_edges = graph.edges_from(&lesson_bs, None).unwrap();
         assert_eq!(all_edges.len(), 4);
 
-        let concept_edges = graph.edges_from(&lesson_bs, Some(&[EdgeLabel::CoversConcept])).unwrap();
+        let concept_edges = graph
+            .edges_from(&lesson_bs, Some(&[EdgeLabel::CoversConcept]))
+            .unwrap();
         assert_eq!(concept_edges.len(), 2);
 
-        let prereq_edges = graph.edges_from(&lesson_bs, Some(&[EdgeLabel::Prerequisite])).unwrap();
+        let prereq_edges = graph
+            .edges_from(&lesson_bs, Some(&[EdgeLabel::Prerequisite]))
+            .unwrap();
         assert_eq!(prereq_edges.len(), 1);
     }
 
@@ -512,14 +583,31 @@ mod tests {
         let c1 = store.write(&make_concept("recursion")).unwrap();
         let c2 = store.write(&make_concept("loops")).unwrap();
 
-        let model = store.write(&Frame {
-            kind: FrameKind::StudentModel,
-            edges: vec![
-                Edge { label: EdgeLabel::MasteryEstimate, target: c1, weight: Some(0.3), annotation: None },
-                Edge { label: EdgeLabel::MasteryEstimate, target: c2, weight: Some(0.9), annotation: None },
-            ],
-            metadata: FrameMetadata { created_at: fixed_ts(), tags: vec![], label: None, label_in_hash: false },
-        }).unwrap();
+        let model = store
+            .write(&Frame {
+                kind: FrameKind::StudentModel,
+                edges: vec![
+                    Edge {
+                        label: EdgeLabel::MasteryEstimate,
+                        target: c1,
+                        weight: Some(0.3),
+                        annotation: None,
+                    },
+                    Edge {
+                        label: EdgeLabel::MasteryEstimate,
+                        target: c2,
+                        weight: Some(0.9),
+                        annotation: None,
+                    },
+                ],
+                metadata: FrameMetadata {
+                    created_at: fixed_ts(),
+                    tags: vec![],
+                    label: None,
+                    label_in_hash: false,
+                },
+            })
+            .unwrap();
 
         let graph = Graph::new(&store);
         let mastery = graph.student_mastery_map(&model).unwrap();
@@ -562,29 +650,50 @@ mod tests {
     fn test_session_events() {
         let (_dir, store) = setup();
 
-        let e_start = store.write(&Event {
-            kind: EventKind::SessionStart,
-            parents: vec![],
-            inputs: vec![], outputs: vec![],
-            trace: CallTrace::empty(),
-            metadata: EventMetadata { timestamp: fixed_ts(), tags: vec![] },
-        }).unwrap();
+        let e_start = store
+            .write(&Event {
+                kind: EventKind::SessionStart,
+                parents: vec![],
+                inputs: vec![],
+                outputs: vec![],
+                trace: CallTrace::empty(),
+                metadata: EventMetadata {
+                    timestamp: fixed_ts(),
+                    tags: vec![],
+                },
+            })
+            .unwrap();
 
-        let e_input = store.write(&Event {
-            kind: EventKind::StudentInput,
-            parents: vec![e_start],
-            inputs: vec![], outputs: vec![],
-            trace: CallTrace::empty(),
-            metadata: EventMetadata { timestamp: fixed_ts(), tags: vec![] },
-        }).unwrap();
+        let e_input = store
+            .write(&Event {
+                kind: EventKind::StudentInput,
+                parents: vec![e_start],
+                inputs: vec![],
+                outputs: vec![],
+                trace: CallTrace::empty(),
+                metadata: EventMetadata {
+                    timestamp: fixed_ts(),
+                    tags: vec![],
+                },
+            })
+            .unwrap();
 
-        let e_call = store.write(&Event {
-            kind: EventKind::ModelCall,
-            parents: vec![e_input],
-            inputs: vec![], outputs: vec![],
-            trace: CallTrace { call_depth: 0, ..CallTrace::empty() },
-            metadata: EventMetadata { timestamp: fixed_ts(), tags: vec![] },
-        }).unwrap();
+        let e_call = store
+            .write(&Event {
+                kind: EventKind::ModelCall,
+                parents: vec![e_input],
+                inputs: vec![],
+                outputs: vec![],
+                trace: CallTrace {
+                    call_depth: 0,
+                    ..CallTrace::empty()
+                },
+                metadata: EventMetadata {
+                    timestamp: fixed_ts(),
+                    tags: vec![],
+                },
+            })
+            .unwrap();
 
         let graph = Graph::new(&store);
         let events = graph.session_events(&e_call).unwrap();
@@ -599,23 +708,45 @@ mod tests {
         let (_dir, store) = setup();
 
         let child_output = store.write(&make_concept("child output")).unwrap();
-        let child_event = store.write(&Event {
-            kind: EventKind::ModelCall,
-            parents: vec![],
-            inputs: vec![],
-            outputs: vec![EventRef { hash: child_output, role: "model_output".into() }],
-            trace: CallTrace { call_depth: 1, ..CallTrace::empty() },
-            metadata: EventMetadata { timestamp: fixed_ts(), tags: vec![] },
-        }).unwrap();
+        let child_event = store
+            .write(&Event {
+                kind: EventKind::ModelCall,
+                parents: vec![],
+                inputs: vec![],
+                outputs: vec![EventRef {
+                    hash: child_output,
+                    role: "model_output".into(),
+                }],
+                trace: CallTrace {
+                    call_depth: 1,
+                    ..CallTrace::empty()
+                },
+                metadata: EventMetadata {
+                    timestamp: fixed_ts(),
+                    tags: vec![],
+                },
+            })
+            .unwrap();
 
-        let root_event = store.write(&Event {
-            kind: EventKind::ModelCall,
-            parents: vec![],
-            inputs: vec![],
-            outputs: vec![EventRef { hash: child_event, role: "child_call".into() }],
-            trace: CallTrace { call_depth: 0, ..CallTrace::empty() },
-            metadata: EventMetadata { timestamp: fixed_ts(), tags: vec![] },
-        }).unwrap();
+        let root_event = store
+            .write(&Event {
+                kind: EventKind::ModelCall,
+                parents: vec![],
+                inputs: vec![],
+                outputs: vec![EventRef {
+                    hash: child_event,
+                    role: "child_call".into(),
+                }],
+                trace: CallTrace {
+                    call_depth: 0,
+                    ..CallTrace::empty()
+                },
+                metadata: EventMetadata {
+                    timestamp: fixed_ts(),
+                    tags: vec![],
+                },
+            })
+            .unwrap();
 
         let graph = Graph::new(&store);
         let tree = graph.call_tree(&root_event).unwrap().unwrap();

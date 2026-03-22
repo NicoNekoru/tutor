@@ -254,19 +254,49 @@ mod tests {
         let frame1 = Frame {
             kind: FrameKind::Lesson,
             edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: h_a, weight: None, annotation: None },
-                Edge { label: EdgeLabel::CoversConcept, target: h_b, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: h_a,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: h_b,
+                    weight: None,
+                    annotation: None,
+                },
             ],
-            metadata: FrameMetadata { created_at: ts, tags: vec![], label: None, label_in_hash: false },
+            metadata: FrameMetadata {
+                created_at: ts,
+                tags: vec![],
+                label: None,
+                label_in_hash: false,
+            },
         };
 
         let frame2 = Frame {
             kind: FrameKind::Lesson,
             edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: h_b, weight: None, annotation: None },
-                Edge { label: EdgeLabel::CoversConcept, target: h_a, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: h_b,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: h_a,
+                    weight: None,
+                    annotation: None,
+                },
             ],
-            metadata: FrameMetadata { created_at: ts, tags: vec![], label: None, label_in_hash: false },
+            metadata: FrameMetadata {
+                created_at: ts,
+                tags: vec![],
+                label: None,
+                label_in_hash: false,
+            },
         };
 
         assert_eq!(

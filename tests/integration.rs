@@ -114,8 +114,18 @@ fn ingest_course(ws: &Workspace) -> (Hash, Vec<Hash>) {
         .put(&Frame {
             kind: FrameKind::Lesson,
             edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: c_linear, weight: None, annotation: None },
-                Edge { label: EdgeLabel::IncludesProblem, target: p_max, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c_linear,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::IncludesProblem,
+                    target: p_max,
+                    weight: None,
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-01-01T00:00:00Z"),
@@ -130,11 +140,36 @@ fn ingest_course(ws: &Workspace) -> (Hash, Vec<Hash>) {
         .put(&Frame {
             kind: FrameKind::Lesson,
             edges: vec![
-                Edge { label: EdgeLabel::CoversConcept, target: c_binary, weight: None, annotation: None },
-                Edge { label: EdgeLabel::CoversConcept, target: c_sorted, weight: None, annotation: None },
-                Edge { label: EdgeLabel::Prerequisite, target: lesson_linear, weight: None, annotation: None },
-                Edge { label: EdgeLabel::IncludesProblem, target: p_find, weight: None, annotation: None },
-                Edge { label: EdgeLabel::IncludesExample, target: ex_bs, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c_binary,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::CoversConcept,
+                    target: c_sorted,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::Prerequisite,
+                    target: lesson_linear,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::IncludesProblem,
+                    target: p_find,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::IncludesExample,
+                    target: ex_bs,
+                    weight: None,
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-01-01T00:00:00Z"),
@@ -150,8 +185,18 @@ fn ingest_course(ws: &Workspace) -> (Hash, Vec<Hash>) {
         .put(&Frame {
             kind: FrameKind::Module,
             edges: vec![
-                Edge { label: EdgeLabel::Contains, target: lesson_linear, weight: None, annotation: None },
-                Edge { label: EdgeLabel::Contains, target: lesson_binary, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::Contains,
+                    target: lesson_linear,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::Contains,
+                    target: lesson_binary,
+                    weight: None,
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-01-01T00:00:00Z"),
@@ -245,12 +290,18 @@ fn test_full_tutoring_session() {
     assert_eq!(indexed_concepts.len(), 3);
 
     let algo_tagged = ws.index.by_tag("algorithms").unwrap();
-    assert_eq!(algo_tagged.len(), 2, "linear search + binary search concepts");
+    assert_eq!(
+        algo_tagged.len(),
+        2,
+        "linear search + binary search concepts"
+    );
 
     // Verify reverse edge index.
     let who_covers_binary = ws.index.reverse_edges(&c_binary).unwrap();
     assert!(!who_covers_binary.is_empty());
-    assert!(who_covers_binary.iter().any(|(_, label)| label == "CoversConcept"));
+    assert!(who_covers_binary
+        .iter()
+        .any(|(_, label)| label == "CoversConcept"));
 
     // =========================================================
     // Phase 2: Student model initialization
@@ -261,7 +312,10 @@ fn test_full_tutoring_session() {
     let mastery = graph.student_mastery_map(&model_v1).unwrap();
     assert_eq!(mastery.len(), 3);
     for (_concept, level) in &mastery {
-        assert!((*level - 0.0).abs() < f64::EPSILON, "All mastery should start at 0.0");
+        assert!(
+            (*level - 0.0).abs() < f64::EPSILON,
+            "All mastery should start at 0.0"
+        );
     }
 
     // =========================================================
@@ -272,8 +326,14 @@ fn test_full_tutoring_session() {
             kind: EventKind::SessionStart,
             parents: vec![],
             inputs: vec![
-                EventRef { hash: model_v1, role: "student_model".into() },
-                EventRef { hash: course_hash, role: "course".into() },
+                EventRef {
+                    hash: model_v1,
+                    role: "student_model".into(),
+                },
+                EventRef {
+                    hash: course_hash,
+                    role: "course".into(),
+                },
             ],
             outputs: vec![],
             trace: CallTrace::empty(),
@@ -308,7 +368,10 @@ fn test_full_tutoring_session() {
             kind: EventKind::StudentInput,
             parents: vec![session_start],
             inputs: vec![],
-            outputs: vec![EventRef { hash: student_input_atom, role: "student_message".into() }],
+            outputs: vec![EventRef {
+                hash: student_input_atom,
+                role: "student_message".into(),
+            }],
             trace: CallTrace::empty(),
             metadata: EventMetadata {
                 timestamp: ts("2026-03-20T10:01:00Z"),
@@ -340,8 +403,18 @@ fn test_full_tutoring_session() {
         .put(&Frame {
             kind: FrameKind::RetrievalScope,
             edges: vec![
-                Edge { label: EdgeLabel::InScope, target: c_binary, weight: None, annotation: None },
-                Edge { label: EdgeLabel::InScope, target: c_sorted, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::InScope,
+                    target: c_binary,
+                    weight: None,
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::InScope,
+                    target: c_sorted,
+                    weight: None,
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-03-20T10:01:02Z"),
@@ -356,7 +429,10 @@ fn test_full_tutoring_session() {
         .put(&Event {
             kind: EventKind::ModelCall,
             parents: vec![],
-            inputs: vec![EventRef { hash: retrieval_scope, role: "scope".into() }],
+            inputs: vec![EventRef {
+                hash: retrieval_scope,
+                role: "scope".into(),
+            }],
             outputs: vec![],
             trace: CallTrace {
                 model: Some("claude-haiku".into()),
@@ -379,12 +455,24 @@ fn test_full_tutoring_session() {
             kind: EventKind::ModelCall,
             parents: vec![student_input_event],
             inputs: vec![
-                EventRef { hash: student_input_atom, role: "student_message".into() },
-                EventRef { hash: model_v1, role: "student_model".into() },
+                EventRef {
+                    hash: student_input_atom,
+                    role: "student_message".into(),
+                },
+                EventRef {
+                    hash: model_v1,
+                    role: "student_model".into(),
+                },
             ],
             outputs: vec![
-                EventRef { hash: model_output_atom, role: "model_output".into() },
-                EventRef { hash: child_call_event, role: "child_call".into() },
+                EventRef {
+                    hash: model_output_atom,
+                    role: "model_output".into(),
+                },
+                EventRef {
+                    hash: child_call_event,
+                    role: "child_call".into(),
+                },
             ],
             trace: CallTrace {
                 model: Some("claude-sonnet".into()),
@@ -410,14 +498,34 @@ fn test_full_tutoring_session() {
         .put(&Frame {
             kind: FrameKind::StudentModel,
             edges: vec![
-                Edge { label: EdgeLabel::MasteryEstimate, target: c_linear, weight: Some(0.0), annotation: None },
-                Edge { label: EdgeLabel::MasteryEstimate, target: c_binary, weight: Some(0.4),
-                    annotation: Some(serde_json::json!({"reason": "explained concept, student engaged"})),
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: c_linear,
+                    weight: Some(0.0),
+                    annotation: None,
                 },
-                Edge { label: EdgeLabel::MasteryEstimate, target: c_sorted, weight: Some(0.3),
-                    annotation: Some(serde_json::json!({"reason": "prerequisite mentioned in explanation"})),
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: c_binary,
+                    weight: Some(0.4),
+                    annotation: Some(
+                        serde_json::json!({"reason": "explained concept, student engaged"}),
+                    ),
                 },
-                Edge { label: EdgeLabel::InteractionRecord, target: root_call_event, weight: None, annotation: None },
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: c_sorted,
+                    weight: Some(0.3),
+                    annotation: Some(
+                        serde_json::json!({"reason": "prerequisite mentioned in explanation"}),
+                    ),
+                },
+                Edge {
+                    label: EdgeLabel::InteractionRecord,
+                    target: root_call_event,
+                    weight: None,
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-03-20T10:01:06Z"),
@@ -431,8 +539,14 @@ fn test_full_tutoring_session() {
     let mastery_event = Event {
         kind: EventKind::StudentModelUpdate,
         parents: vec![root_call_event],
-        inputs: vec![EventRef { hash: model_v1, role: "prior_model".into() }],
-        outputs: vec![EventRef { hash: model_v2, role: "updated_model".into() }],
+        inputs: vec![EventRef {
+            hash: model_v1,
+            role: "prior_model".into(),
+        }],
+        outputs: vec![EventRef {
+            hash: model_v2,
+            role: "updated_model".into(),
+        }],
         trace: CallTrace::empty(),
         metadata: EventMetadata {
             timestamp: ts("2026-03-20T10:01:06Z"),
@@ -442,10 +556,7 @@ fn test_full_tutoring_session() {
 
     let mastery_ref = format!("student/{}/mastery", student_id);
     let mastery_event_hash = ws
-        .commit_mutation(
-            &mastery_event,
-            &[(&mastery_ref, model_v1, model_v2)],
-        )
+        .commit_mutation(&mastery_event, &[(&mastery_ref, model_v1, model_v2)])
         .unwrap();
 
     // Verify mastery was updated.
@@ -483,7 +594,10 @@ fn test_full_tutoring_session() {
     // Phase 8: Verify session event chain
     // =========================================================
     let session_events = graph.session_events(&session_end).unwrap();
-    assert!(session_events.len() >= 4, "At least: start, input, call, mastery_update, end");
+    assert!(
+        session_events.len() >= 4,
+        "At least: start, input, call, mastery_update, end"
+    );
 
     let kinds: Vec<EventKind> = session_events.iter().map(|(_, e)| e.kind).collect();
     assert_eq!(kinds[0], EventKind::SessionStart);
@@ -538,14 +652,8 @@ fn test_full_tutoring_session() {
     assert_eq!(objects.len(), 10);
 
     // Verify types in export.
-    let atom_count = objects
-        .iter()
-        .filter(|o| o["type"] == "Atom")
-        .count();
-    let frame_count = objects
-        .iter()
-        .filter(|o| o["type"] == "Frame")
-        .count();
+    let atom_count = objects.iter().filter(|o| o["type"] == "Atom").count();
+    let frame_count = objects.iter().filter(|o| o["type"] == "Frame").count();
     assert_eq!(atom_count, 6);
     assert_eq!(frame_count, 4);
 
@@ -594,7 +702,10 @@ fn test_full_tutoring_session() {
     assert_eq!(atoms2.len(), 6);
 
     // Index persisted and queries still work.
-    let concepts_after = ws2.index.atoms_by_kind(AtomKind::ConceptDefinition).unwrap();
+    let concepts_after = ws2
+        .index
+        .atoms_by_kind(AtomKind::ConceptDefinition)
+        .unwrap();
     assert_eq!(concepts_after.len(), 3);
 
     // Rebuild index from scratch and verify consistency.
@@ -621,9 +732,24 @@ fn test_concurrent_student_namespaces() {
         .put(&Frame {
             kind: FrameKind::StudentModel,
             edges: vec![
-                Edge { label: EdgeLabel::MasteryEstimate, target: concepts[0], weight: Some(0.8), annotation: None },
-                Edge { label: EdgeLabel::MasteryEstimate, target: concepts[1], weight: Some(0.5), annotation: None },
-                Edge { label: EdgeLabel::MasteryEstimate, target: concepts[2], weight: Some(0.6), annotation: None },
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: concepts[0],
+                    weight: Some(0.8),
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: concepts[1],
+                    weight: Some(0.5),
+                    annotation: None,
+                },
+                Edge {
+                    label: EdgeLabel::MasteryEstimate,
+                    target: concepts[2],
+                    weight: Some(0.6),
+                    annotation: None,
+                },
             ],
             metadata: FrameMetadata {
                 created_at: ts("2026-03-20T11:00:00Z"),

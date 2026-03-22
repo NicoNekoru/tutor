@@ -126,10 +126,7 @@ impl RefStore {
                 if let Ok(rel) = path.strip_prefix(&self.refs_dir) {
                     let name = rel.to_string_lossy().replace('\\', "/");
                     if let Ok(Some(hash)) = self.read(&name) {
-                        results.push(Ref {
-                            name,
-                            target: hash,
-                        });
+                        results.push(Ref { name, target: hash });
                     }
                 }
             }
@@ -247,9 +244,15 @@ mod tests {
     fn test_list_all() {
         let (_dir, store) = setup();
         store.write("HEAD", &Hash::compute(b"a")).unwrap();
-        store.write("student/mastery", &Hash::compute(b"b")).unwrap();
-        store.write("student/session", &Hash::compute(b"c")).unwrap();
-        store.write("course/structure", &Hash::compute(b"d")).unwrap();
+        store
+            .write("student/mastery", &Hash::compute(b"b"))
+            .unwrap();
+        store
+            .write("student/session", &Hash::compute(b"c"))
+            .unwrap();
+        store
+            .write("course/structure", &Hash::compute(b"d"))
+            .unwrap();
 
         let all = store.list("").unwrap();
         assert_eq!(all.len(), 4);
@@ -259,9 +262,15 @@ mod tests {
     fn test_list_prefix() {
         let (_dir, store) = setup();
         store.write("HEAD", &Hash::compute(b"a")).unwrap();
-        store.write("student/mastery", &Hash::compute(b"b")).unwrap();
-        store.write("student/session", &Hash::compute(b"c")).unwrap();
-        store.write("course/structure", &Hash::compute(b"d")).unwrap();
+        store
+            .write("student/mastery", &Hash::compute(b"b"))
+            .unwrap();
+        store
+            .write("student/session", &Hash::compute(b"c"))
+            .unwrap();
+        store
+            .write("course/structure", &Hash::compute(b"d"))
+            .unwrap();
 
         let student_refs = store.list("student").unwrap();
         assert_eq!(student_refs.len(), 2);
