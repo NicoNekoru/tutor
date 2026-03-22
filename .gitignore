@@ -1,12 +1,2 @@
-node_modules/
-dist/
-.cache/
+/target
 .DS_Store
-*.db
-*.sqlite
-.env
-.env.local
-.vscode/
-.idea/
-*.log
-courses/**
