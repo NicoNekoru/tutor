@@ -1,2 +1,4 @@
 /target
 .DS_Store
+.ruff_cache
+.venv

@@ -281,18 +281,20 @@ impl Index {
     }
 
     /// Find the N most recent Events, optionally filtered by kind.
+    #[allow(clippy::cast_possible_wrap)]
     pub fn recent_events(&self, n: usize, kind: Option<EventKind>) -> Result<Vec<Hash>> {
+        let limit = n as i64;
         match kind {
             Some(k) => {
                 let kind_str = format!("{k:?}");
                 self.query_hashes(
                     "SELECT hash FROM events WHERE kind = ?1 ORDER BY timestamp DESC LIMIT ?2",
-                    params![kind_str, n],
+                    params![kind_str, limit],
                 )
             }
             None => self.query_hashes(
                 "SELECT hash FROM events ORDER BY timestamp DESC LIMIT ?1",
-                params![n],
+                params![limit],
             ),
         }
     }

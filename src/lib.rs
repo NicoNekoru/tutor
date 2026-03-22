@@ -19,6 +19,7 @@ pub mod refs;
 pub mod graph;
 pub mod index;
 pub mod workspace;
+pub mod pybridge;
 
 // Re-export the primary public API.
 pub use error::{Error, Result};
