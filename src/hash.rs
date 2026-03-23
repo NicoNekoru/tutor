@@ -32,9 +32,10 @@ impl Hash {
 
     /// Full 64-character lowercase hex string.
     pub fn to_hex(&self) -> String {
+        use std::fmt::Write;
         let mut s = String::with_capacity(64);
         for byte in &self.0 {
-            s.push_str(&format!("{byte:02x}"));
+            let _ = write!(s, "{byte:02x}");
         }
         s
     }

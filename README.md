@@ -112,6 +112,37 @@ The Python layer (to be built on top of this crate) handles retrieval strategies
 - **Concurrent safety via CAS.** Compare-and-swap on refs is the only synchronization primitive. Objects are append-only and idempotent.
 - **Course content is shared, student state is per-student.** Course refs under `course/` are effectively read-only during tutoring. Student state lives under `student/{id}/`.
 
+### Retrieval system
+
+Retrieval is not a single function — it is a pipeline of composable strategies, each producing scored candidates, which are then merged and ranked by a `RetrievalPolicy`.
+
+```python
+from rlm_ws.retrieval import RetrievalQuery, RetrievalIntent, retrieve
+
+query = RetrievalQuery(
+    focus_concepts=[binary_search_hash],
+    student_model=student_model_hash,
+    intent=RetrievalIntent.EXPLAIN_CONCEPT,
+    max_results=10,
+)
+results = retrieve(query, ws)  # uses default policy for EXPLAIN_CONCEPT
+
+for candidate in results:
+    print(f"{candidate.hash.short()} score={candidate.score:.2f} — {candidate.explanation}")
+```
+
+Built-in strategies:
+
+| Strategy | What it does |
+|---|---|
+| `GraphProximity` | BFS from focus concepts, scoring by edge distance |
+| `MasteryAware` | Boosts low-mastery concepts, deprioritizes mastered ones |
+| `TemporalRecency` | Scores recent events and their associated objects higher |
+| `PrerequisiteChain` | Walks Prerequisite edges to surface foundational content |
+| `InteractionHistory` | Finds objects from past student interactions |
+
+Each `RetrievalIntent` maps to a default policy that weights these strategies. Custom policies can override any default.
+
 ## Development
 
 ### Prerequisites
@@ -133,29 +164,34 @@ cargo test                   # 69 tests: 66 unit + 3 integration
 # Python: venv, build, test (maturin activates the "python" feature automatically)
 uv sync
 uv pip install maturin
-uv run maturin develop          # builds Rust + pybridge → installs as Python native module
+uv run maturin develop              # builds Rust + pybridge → installs as Python native module
 uv run python tests/test_python.py  # 12 tests
 ```
 
 ### Project layout
 
 ```
-src/
-├── lib.rs          ← crate root, lint policy, re-exports
-├── error.rs        ← error types (thiserror)
-├── hash.rs         ← SHA-256 content hash with serde for bincode + JSON
-├── types.rs        ← Atom, Frame, Event, all enums, json_value_compat
-├── envelope.rs     ← on-disk binary format, Storable trait
-├── store.rs        ← content-addressable filesystem store
-├── refs.rs         ← mutable named pointers, CAS
-├── graph.rs        ← BFS/DFS traversal, call trees, shortest path
-├── index.rs        ← SQLite secondary indexes (derived, rebuildable)
-├── workspace.rs    ← top-level API, commit_mutation, GC, export
-└── pybridge.rs     ← PyO3 bindings (all types + Workspace)
+src/                            ← Rust core (plumbing)
+├── lib.rs                      ← crate root, lint policy, re-exports
+├── error.rs                    ← error types (thiserror)
+├── hash.rs                     ← SHA-256 content hash with serde for bincode + JSON
+├── types.rs                    ← Atom, Frame, Event, all enums, json_value_compat
+├── envelope.rs                 ← on-disk binary format, Storable trait
+├── store.rs                    ← content-addressable filesystem store
+├── refs.rs                     ← mutable named pointers, CAS
+├── graph.rs                    ← BFS/DFS traversal, call trees, shortest path
+├── index.rs                    ← SQLite secondary indexes (derived, rebuildable)
+├── workspace.rs                ← top-level API, commit_mutation, GC, export
+└── pybridge.rs                 ← PyO3 bindings (feature-gated behind "python")
+
+python/rlm_ws/                  ← Python porcelain layer
+├── __init__.py                 ← re-exports native types + retrieval
+└── retrieval.py                ← retrieval strategies, policies, composition
 
 tests/
-├── integration.rs  ← full tutoring session lifecycle (Rust)
-└── test_python.py  ← Python bridge tests
+├── integration.rs              ← full tutoring session lifecycle (Rust)
+├── test_python.py              ← Python bridge tests (12 tests)
+└── test_retrieval.py           ← retrieval system tests (15 tests)
 ```
 
 ### Lint policy

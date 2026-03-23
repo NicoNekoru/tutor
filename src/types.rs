@@ -9,6 +9,9 @@ use crate::hash::Hash;
 mod json_value_compat {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
+    // Signature is dictated by serde's `#[serde(with = "...")]` contract —
+    // it always passes `&FieldType`, so `&Option<T>` is unavoidable here.
+    #[allow(clippy::ref_option)]
     pub fn serialize<S>(value: &Option<serde_json::Value>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
