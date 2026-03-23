@@ -1,12 +1,6 @@
-node_modules/
-dist/
-.cache/
+/target
 .DS_Store
-*.db
-*.sqlite
-.env
-.env.local
-.vscode/
-.idea/
-*.log
-courses/**
+.ruff_cache
+.venv
+__pycache__
+*cpython*

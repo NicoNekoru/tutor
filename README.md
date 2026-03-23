@@ -1,144 +1,246 @@
-# Tutor RLM
+# rlm-ws
 
-A TUI-based tutoring application inspired by Recursive Language Model (RLM) architecture.
+A content-addressable object store for [Recursive Language Model](https://arxiv.org/abs/2502.14155) workspaces. Think of it as Git's object model, but designed for knowledge graphs, pedagogical state tracking, and recursive LLM orchestration instead of source code versioning.
 
-## Motivations
+The Rust core provides the storage engine. Python bindings (via PyO3) expose the full API as a native module. Retrieval policies, model orchestration, and tutoring logic live in Python on top.
 
-Standard chat-based tutoring applications face fundamental limitations:
+## Quickstart
 
-- **Context Window Constraints**: LLMs can only hold limited information in their prompt, causing them to forget earlier parts of long tutoring sessions
-- **Chat Drift**: Without persistent state, the model's behavior becomes inconsistent over time as it loses track of the pedagogical context
-- **Black Box Nature**: Users cannot inspect what the model "remembers" or why it gave a particular explanation
-- **Scalability Issues**: As course material grows, the approach becomes increasingly ineffective
-
-The Recursive Language Model (RLM) architecture addresses these limitations by providing a principled approach to building effective, scalable, and transparent tutoring systems:
-
-### Core Advantages of RLM Architecture
-
-1. **Persistent Pedagogical Memory**
-   - Maintains canonical state on disk in structured, human-readable formats:
-     - Markdown for syllabus, lesson plans, concept explanations
-     - YAML/JSON/TOML for metadata and machine-readable state (student profiles, tutor persona)
-     - SQLite for logs, indexing metadata, embeddings, and event records
-   - Enables long-term tracking of learning progress, misconceptions, and instructional history that survives model restarts and session boundaries
-   - Stores not just what was said, but what was learned, mastered, and struggled with
-
-2. **Effective Unlimited Context via Retrieval**
-   - Keeps the active prompt small while providing access to arbitrarily large course materials
-   - Uses hybrid retrieval (lexical + semantic + structural) to find pedagogically relevant context
-   - Allows the model to search, inspect, summarize, and update course memory rather than trying to hold everything in-context
-   - Implements the RLM principle: "keep the active prompt small, recursively retrieve and inspect relevant state, use tools to reason over the persistent context"
-
-3. **Transparency & Inspectability**
-   - Makes tutoring memory visible: users can see what was retrieved, why it was retrieved, and what files were updated
-   - Shows retrieved documents, ranked chunks, lesson references, and notes used in response generation
-   - Builds trust and enables debugging by exposing the model's reasoning process over persistent state
-   - Solves the "black box" problem by making the tutoring system's inner workings inspectable rather than hidden in model weights
-   - Aligns with the RLM spirit: the model is not magically remembering; it is operating over tools and state
-
-4. **Consistent & Personalized Pedagogy**
-   - Maintains stable tutor persona, course goals, and learning state across sessions (no "chat drift")
-   - Tracks rich learning state: what the student has seen, understood, misunderstood, what should be reviewed, preferred explanation styles, and comfort with abstraction levels
-   - Enables adaptive instruction based on mastery-aware retrieval and personalized learning state
-   - Supports explicit representation of tutor contracts (teaching style, rigor level, preferred methods) and student profiles (goals, prior knowledge, learning preferences)
-   - Supports sophisticated features like misconception registries that are gold for retrieval and targeted instruction
-
-5. **Scalable Design**
-   - Supports arbitrarily large course materials through efficient retrieval rather than context window limitations
-   - Uses SQLite/FTS5 for metadata and indexing with optional embeddings for semantic retrieval
-   - Separates concerns cleanly: workspace management, indexing, retrieval, orchestration, and model adaption
-   - Enables the system to grow with the curriculum without degrading performance
-
-This transforms the model from a stateless chatbot into an intelligent operator over a persistent knowledge base, creating a more reliable, inspectable, personalized, and scalable tutoring system where the course state remains visible and usable even if the model component changes.
-
-## Features
-
-- Persistent pedagogical memory with file-based course artifacts
-- Hybrid retrieval (lexical + semantic + structural)
-- Knowledge graph representation of concepts
-- Transparent context inspection
-- Model-agnostic adapter layer
-- Python REPL tool for advanced operations
-
-## Quick Start
-
-### 1. Install dependencies
+### Python (recommended)
 
 ```bash
-# Using bun (for TypeScript app)
-bun install
-
-# Using uv (for Python tools)
+# Requires: Rust toolchain (rustup), Python 3.9+, uv
+git clone <repo> && cd rlm-ws
 uv sync
+uv pip install maturin
+uv run maturin develop
 ```
 
-### 2. Initialize a course
+```python
+import rlm_ws
+
+# Create a workspace
+ws = rlm_ws.Workspace.init("/tmp/my-course")
+
+# Store content
+concept = rlm_ws.Atom("ConceptDefinition", "Binary search halves the search space each step. O(log n).", tags=["algorithms"])
+ch = ws.put_atom(concept)
+
+problem = rlm_ws.Atom("ProblemStatement", "Find an element in a sorted array.")
+ph = ws.put_atom(problem)
+
+# Build structure
+lesson = rlm_ws.Frame("Lesson", [
+    rlm_ws.Edge("CoversConcept", ch),
+    rlm_ws.Edge("IncludesProblem", ph),
+], label="Binary Search")
+lh = ws.put_frame(lesson)
+
+# Set a ref (the only mutable state)
+ws.set_ref("course/structure", lh)
+
+# Query the graph
+atoms = ws.collect_atoms(lh, "ConceptDefinition")  # [(Hash, Atom), ...]
+ws.reverse_edges(ch)                                # who points to this concept?
+ws.by_tag("algorithms")                             # tag lookup
+
+# Reopen later — everything persists
+ws2 = rlm_ws.Workspace.open("/tmp/my-course")
+assert ws2.get_ref_hash("course/structure") == lh
+```
+
+### Rust only
 
 ```bash
-bun run src/index.ts init --course-id combinatorics --subject combinatorics
+cd rlm-ws
+cargo test           # 69 tests
+cargo clippy --all-targets  # zero warnings
 ```
 
-### 3. Start the TUI
+```rust
+use rlm_ws::*;
 
-```bash
-bun run src/index.ts start --course-id combinatorics
-```
+let ws = Workspace::init(Path::new("/tmp/my-course")).unwrap();
 
-## Project Structure
-
-```
-tutor/
-├── src/
-│   ├── schemas/         # TypeScript type definitions
-│   ├── workspace/       # Workspace management (file I/O)
-│   ├── indexer/         # Chunk extraction and SQLite indexing
-│   ├── retrieval/       # Search engine with hybrid ranking
-│   ├── adapter/         # Model backend adapter (CLI, API, etc.)
-│   ├── orchestrator/    # Turn logic, context assembly, tool routing
-│   ├── consolidation/  # Post-session summarization
-│   └── tui/             # Terminal UI with 4-pane layout
-├── courses/             # Course workspaces (created at runtime)
-├── python_tools/        # Python utilities (REPL worker, math tools)
-└── pyproject.toml       # Python dependencies (uv)
+let atom = Atom {
+    kind: AtomKind::ConceptDefinition,
+    content: AtomContent::text("Binary search is O(log n)"),
+    metadata: AtomMetadata::now().with_tags(vec!["algorithms".into()]),
+};
+let hash = ws.put(&atom).unwrap();
 ```
 
 ## Architecture
 
-The system separates canonical state (files) from dynamic context (model prompt). Core components:
-
-1. **Workspace**: Human-readable files on disk (syllabus.md, lessons/_.md, concepts/_.md, etc.)
-2. **Index**: SQLite with FTS5 for fast retrieval and metadata
-3. **Retrieval**: Hybrid search combining lexical, semantic, and structural signals
-4. **Orchestrator**: Assembles context, classifies intent, executes tools
-5. **Model Adapter**: Pluggable interface to various LLM backends
-6. **TUI**: Four-pane interface showing dialogue, navigation, context, and tools
-
-## Configuration
-
-Model backends are configured via environment variables or config files. Example for opencode:
-
-```bash
-export TUTOR_MODEL_BACKEND=opencode
-export OPENCODE_API_KEY=...
 ```
+.rlm/                          ← the workspace (single source of truth)
+├── config                     ← workspace metadata (TOML)
+├── objects/
+│   └── ab/cd1234...           ← content-addressed, sharded by first 2 hex chars
+├── refs/
+│   ├── HEAD
+│   ├── course/structure       ← named mutable pointers (the ONLY mutable state)
+│   └── student/alice/mastery
+├── index/
+│   └── index.sqlite3          ← secondary indexes (derived, rebuildable)
+└── tmp/                       ← staging area for atomic writes
+```
+
+### Object model
+
+Four primitive types, all immutable and content-addressed (SHA-256):
+
+| Type | Role | Analogy |
+|---|---|---|
+| **Atom** | Leaf content (concept definitions, problems, model outputs, student responses) | Git blob |
+| **Frame** | Typed edges to other objects (lessons, modules, student models) | Git tree |
+| **Event** | Temporal record of something that happened (model calls, mastery updates) | Git commit |
+| **Ref** | Named mutable pointer to a hash | Git ref |
+
+Objects are never mutated. A new version of anything is a new object with a new hash. Refs are the only mutable state.
+
+### Plumbing / porcelain split
+
+The Rust core is deliberately boring: object serialization, hashing, storage, refs, graph traversal, and rebuildable indexes. It contains no ML models, no retrieval policies, no pedagogy.
+
+The Python layer (to be built on top of this crate) handles retrieval strategies, execution orchestration, model-provider adapters, and tutoring logic. This separation keeps the storage engine deterministic and inspectable without network access.
+
+### Key invariants
+
+- **`put` never requires network access.** Embeddings are derived, optional, and out-of-band.
+- **Derived data is never required for correctness.** The SQLite index can be deleted and rebuilt from the object store with `ws.rebuild_index()`.
+- **Concurrent safety via CAS.** Compare-and-swap on refs is the only synchronization primitive. Objects are append-only and idempotent.
+- **Course content is shared, student state is per-student.** Course refs under `course/` are effectively read-only during tutoring. Student state lives under `student/{id}/`.
+
+### Retrieval system
+
+Retrieval is not a single function — it is a pipeline of composable strategies, each producing scored candidates, which are then merged and ranked by a `RetrievalPolicy`.
+
+```python
+from rlm_ws.retrieval import RetrievalQuery, RetrievalIntent, retrieve
+
+query = RetrievalQuery(
+    focus_concepts=[binary_search_hash],
+    student_model=student_model_hash,
+    intent=RetrievalIntent.EXPLAIN_CONCEPT,
+    max_results=10,
+)
+results = retrieve(query, ws)  # uses default policy for EXPLAIN_CONCEPT
+
+for candidate in results:
+    print(f"{candidate.hash.short()} score={candidate.score:.2f} — {candidate.explanation}")
+```
+
+Built-in strategies:
+
+| Strategy | What it does |
+|---|---|
+| `GraphProximity` | BFS from focus concepts, scoring by edge distance |
+| `MasteryAware` | Boosts low-mastery concepts, deprioritizes mastered ones |
+| `TemporalRecency` | Scores recent events and their associated objects higher |
+| `PrerequisiteChain` | Walks Prerequisite edges to surface foundational content |
+| `InteractionHistory` | Finds objects from past student interactions |
+
+Each `RetrievalIntent` maps to a default policy that weights these strategies. Custom policies can override any default.
 
 ## Development
 
+### Prerequisites
+
+- **Rust** ≥ 1.83 (via [rustup](https://rustup.rs/))
+- **Python** ≥ 3.9
+- **uv** (`pip install uv` or see [docs](https://docs.astral.sh/uv/))
+
+### Setup
+
 ```bash
-# Run in watch mode
-bun run dev
+# Clone and enter the project
+git clone <repo> && cd rlm-ws
 
-# Build
-bun run build
+# Rust: check, lint, test (no Python needed — pybridge is feature-gated)
+cargo clippy --all-targets   # must be zero warnings (deny(warnings) is set)
+cargo test                   # 69 tests: 66 unit + 3 integration
 
-# Lint
-bun run lint
+# Python: venv, build, test (maturin activates the "python" feature automatically)
+uv sync
+uv pip install maturin
+uv run maturin develop              # builds Rust + pybridge → installs as Python native module
+uv run python tests/test_python.py  # 12 tests
 ```
 
-## Note
+### Project layout
 
-This is an early prototype. The architecture is inspired by the RLM paper and emphasizes:
+```
+src/                            ← Rust core (plumbing)
+├── lib.rs                      ← crate root, lint policy, re-exports
+├── error.rs                    ← error types (thiserror)
+├── hash.rs                     ← SHA-256 content hash with serde for bincode + JSON
+├── types.rs                    ← Atom, Frame, Event, all enums, json_value_compat
+├── envelope.rs                 ← on-disk binary format, Storable trait
+├── store.rs                    ← content-addressable filesystem store
+├── refs.rs                     ← mutable named pointers, CAS
+├── graph.rs                    ← BFS/DFS traversal, call trees, shortest path
+├── index.rs                    ← SQLite secondary indexes (derived, rebuildable)
+├── workspace.rs                ← top-level API, commit_mutation, GC, export
+└── pybridge.rs                 ← PyO3 bindings (feature-gated behind "python")
 
-- Inspectability (you can see what was retrieved)
-- Persistence (all course artifacts stored in plain files)
-- Extensibility (swap model backends, add retrieval strategies)
+python/rlm_ws/                  ← Python porcelain layer
+├── __init__.py                 ← re-exports native types + retrieval
+└── retrieval.py                ← retrieval strategies, policies, composition
+
+tests/
+├── integration.rs              ← full tutoring session lifecycle (Rust)
+├── test_python.py              ← Python bridge tests (12 tests)
+└── test_retrieval.py           ← retrieval system tests (15 tests)
+```
+
+### Lint policy
+
+The crate uses `#![deny(warnings)]` and `#![deny(clippy::all)]` with `#![warn(clippy::pedantic)]`. All code must compile with zero warnings. A few pedantic lints are explicitly allowed where they conflict with library ergonomics (documented in `lib.rs`).
+
+### Serialization: known constraints
+
+Two implementation constraints discovered during development, worth knowing before modifying types:
+
+1. **`skip_serializing_if` is incompatible with bincode.** Bincode is a positional format. Skipping a field during serialization shifts all subsequent byte offsets, causing deserialization failures. Never use `#[serde(skip_serializing_if = "...")]` on any type that goes through bincode (which is all `Storable` types).
+
+2. **`serde_json::Value` requires a compatibility wrapper for bincode.** Bincode doesn't support `deserialize_any`, which `serde_json::Value` requires. The `json_value_compat` module in `types.rs` serializes JSON values as strings in binary formats and as native JSON in human-readable formats. All `Option<serde_json::Value>` fields must use `#[serde(default, with = "json_value_compat")]`.
+
+### Dependency notes
+
+| Crate | Version | Why this version |
+|---|---|---|
+| `sha2` | `0.10` | Current stable RustCrypto generation. Semver-stable, no upper bound needed. |
+| `serde` | `1` | API-stable for years. The entire Rust ecosystem depends on serde 1.x. |
+| `serde_json` | `1` | Same stability story as serde. |
+| `bincode` | `1` | Pinned to 1.x deliberately. Bincode 2.0 is a complete rewrite that drops serde in favor of its own `Encode`/`Decode` traits. Our `Storable` trait and `json_value_compat` module depend on bincode 1's serde integration. Migration to bincode 2 would be a deliberate, breaking change to the on-disk format. |
+| `chrono` | `0.4` | Standard datetime library. `default-features = false` avoids the deprecated `oldtime` feature. Only `std`, `clock`, and `serde` are needed. |
+| `thiserror` | `2` | Error derive macros. 2.x is the current generation for Rust >= 1.83. |
+| `tempfile` | `3` | Atomic file operations for the tmp-then-rename write pattern. Also used in tests. |
+| `rusqlite` | `0.38` | SQLite bindings. `bundled` feature compiles SQLite from source to eliminate system dependency. Adds ~30s to clean builds but works everywhere without `apt install libsqlite3-dev`. |
+| `pyo3` | `0.28` | Python bindings. Uses the Bound API introduced in 0.22+. Requires Rust >= 1.83. |
+
+### The three-step mutation pattern
+
+State changes follow a specific protocol (from spec section 14.3):
+
+```python
+# 1. Write immutable objects
+new_model = ws.put_frame(Frame("StudentModel", [...]))
+
+# 2. Record an Event
+event = Event("StudentModelUpdate",
+    inputs=[EventRef(old_model, "prior")],
+    outputs=[EventRef(new_model, "updated")])
+
+# 3. CAS the ref
+ws.commit_mutation(event, [
+    ("student/alice/mastery", old_model, new_model),
+])
+```
+
+`commit_mutation` performs steps 2 and 3 atomically. If the CAS fails (ref was updated by another process), the event is still written (harmless — objects are immutable) but the ref is not updated, and a `ValueError` is raised.
+
+## License
+
+TBD
