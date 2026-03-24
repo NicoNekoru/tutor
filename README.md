@@ -9,11 +9,56 @@ The Rust core provides the storage engine. Python bindings (via PyO3) expose the
 ### Python (recommended)
 
 ```bash
-# Requires: Rust toolchain (rustup), Python 3.9+, uv
+# Requires: Rust toolchain (rustup), Python 3.10+, uv
 git clone <repo> && cd rlm-ws
 uv sync
 uv pip install maturin
 uv run maturin develop
+```
+
+### CLI quickstart
+
+```bash
+# Initialize a workspace
+rlm-ws init ./my-course --name "Intro to Algorithms"
+
+# Ingest course materials (markdown)
+rlm-ws ingest examples/algorithms-course.md
+
+# Inspect the workspace
+rlm-ws inspect
+rlm-ws inspect --mastery alice
+
+# Start a tutoring session
+export OPENROUTER_API_KEY="sk-..."
+rlm-ws session --student alice
+
+# In-session commands: /mastery, /tree, /status, /quit
+
+# Maintenance
+rlm-ws gc
+rlm-ws export course/structure -o course.json
+```
+
+### Course markdown format
+
+```markdown
+# Module Name
+
+## Lesson Name
+
+Lesson body text (becomes a LessonBody atom).
+
+### Concept: Binary Search
+Definition text (becomes a ConceptDefinition atom).
+
+### Problem: Find Element
+Problem statement (becomes a ProblemStatement atom).
+
+### Example: Step-by-Step
+Worked example (becomes a WorkedExample atom).
+
+<!-- prerequisite: Other Lesson Name -->
 ```
 
 ```python
@@ -148,7 +193,7 @@ Each `RetrievalIntent` maps to a default policy that weights these strategies. C
 ### Prerequisites
 
 - **Rust** ≥ 1.83 (via [rustup](https://rustup.rs/))
-- **Python** ≥ 3.9
+- **Python** ≥ 3.10
 - **uv** (`pip install uv` or see [docs](https://docs.astral.sh/uv/))
 
 ### Setup
@@ -185,13 +230,21 @@ src/                            ← Rust core (plumbing)
 └── pybridge.rs                 ← PyO3 bindings (feature-gated behind "python")
 
 python/rlm_ws/                  ← Python porcelain layer
-├── __init__.py                 ← re-exports native types + retrieval
-└── retrieval.py                ← retrieval strategies, policies, composition
+├── __init__.py                 ← re-exports native types + retrieval + CLI
+├── retrieval.py                ← retrieval strategies, policies, composition
+├── ingest.py                   ← markdown course parser → workspace objects
+├── session.py                  ← interactive tutoring session (RLM execution loop)
+├── display.py                  ← rich terminal formatting helpers
+└── cli.py                      ← typer CLI (init, ingest, session, inspect, gc, export)
+
+examples/
+└── algorithms-course.md        ← sample course in the ingestion markdown format
 
 tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
-└── test_retrieval.py           ← retrieval system tests (15 tests)
+├── test_retrieval.py           ← retrieval system tests (15 tests)
+└── test_cli.py                 ← CLI, ingestion, and session tests (6 tests)
 ```
 
 ### Lint policy

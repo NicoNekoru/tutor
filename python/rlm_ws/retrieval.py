@@ -125,8 +125,11 @@ class GraphProximity:
 
     # Edge labels that represent curricular structure (not student state).
     _CURRICULAR_LABELS = {
-        "CoversConcept", "Contains", "IncludesProblem",
-        "IncludesExample", "Prerequisite",
+        "CoversConcept",
+        "Contains",
+        "IncludesProblem",
+        "IncludesExample",
+        "Prerequisite",
     }
 
     def retrieve(
@@ -238,40 +241,48 @@ class MasteryAware:
             if level < self.low_threshold:
                 # Low mastery: boost this concept and its related content.
                 score = 1.0 - level  # lower mastery → higher score
-                candidates.append(ScoredCandidate(
-                    hash=concept_hash,
-                    score=score,
-                    source_strategy="MasteryAware",
-                    explanation=f"low mastery ({level:.2f}), needs attention",
-                ))
+                candidates.append(
+                    ScoredCandidate(
+                        hash=concept_hash,
+                        score=score,
+                        source_strategy="MasteryAware",
+                        explanation=f"low mastery ({level:.2f}), needs attention",
+                    )
+                )
 
                 # Find related content via reverse edges.
                 for frame_hash, label in ws.reverse_edges(concept_hash):
-                    candidates.append(ScoredCandidate(
-                        hash=frame_hash,
-                        score=score * 0.8,
-                        source_strategy="MasteryAware",
-                        explanation=f"related to low-mastery concept ({level:.2f})",
-                    ))
+                    candidates.append(
+                        ScoredCandidate(
+                            hash=frame_hash,
+                            score=score * 0.8,
+                            source_strategy="MasteryAware",
+                            explanation=f"related to low-mastery concept ({level:.2f})",
+                        )
+                    )
 
             elif level > self.high_threshold:
                 # High mastery: include but demote.
-                candidates.append(ScoredCandidate(
-                    hash=concept_hash,
-                    score=0.1,
-                    source_strategy="MasteryAware",
-                    explanation=f"high mastery ({level:.2f}), deprioritized",
-                ))
+                candidates.append(
+                    ScoredCandidate(
+                        hash=concept_hash,
+                        score=0.1,
+                        source_strategy="MasteryAware",
+                        explanation=f"high mastery ({level:.2f}), deprioritized",
+                    )
+                )
 
             else:
                 # Medium mastery: moderate score.
                 score = 0.5
-                candidates.append(ScoredCandidate(
-                    hash=concept_hash,
-                    score=score,
-                    source_strategy="MasteryAware",
-                    explanation=f"medium mastery ({level:.2f})",
-                ))
+                candidates.append(
+                    ScoredCandidate(
+                        hash=concept_hash,
+                        score=score,
+                        source_strategy="MasteryAware",
+                        explanation=f"medium mastery ({level:.2f})",
+                    )
+                )
 
         return candidates
 
@@ -302,24 +313,28 @@ class TemporalRecency:
             score *= query.recency_weight * 2  # scale by query's recency preference
             score = min(1.0, score)
 
-            candidates.append(ScoredCandidate(
-                hash=event_hash,
-                score=score,
-                source_strategy="TemporalRecency",
-                explanation=f"event at recency rank {rank}",
-            ))
+            candidates.append(
+                ScoredCandidate(
+                    hash=event_hash,
+                    score=score,
+                    source_strategy="TemporalRecency",
+                    explanation=f"event at recency rank {rank}",
+                )
+            )
 
             # Also include the event's input/output objects.
             event = ws.get_event(event_hash)
             if event is None:
                 continue
             for ref in event.inputs + event.outputs:
-                candidates.append(ScoredCandidate(
-                    hash=ref.hash,
-                    score=score * 0.7,
-                    source_strategy="TemporalRecency",
-                    explanation=f"referenced by recent event (rank {rank}, role={ref.role})",
-                ))
+                candidates.append(
+                    ScoredCandidate(
+                        hash=ref.hash,
+                        score=score * 0.7,
+                        source_strategy="TemporalRecency",
+                        explanation=f"referenced by recent event (rank {rank}, role={ref.role})",
+                    )
+                )
 
         return candidates
 
@@ -375,23 +390,27 @@ class PrerequisiteChain:
         prereq_edges = ws.edges_from(frame_hash, "Prerequisite")
         for edge in prereq_edges:
             prereq_score = score * self.decay
-            candidates.append(ScoredCandidate(
-                hash=edge.target,
-                score=prereq_score,
-                source_strategy="PrerequisiteChain",
-                explanation=f"prerequisite at depth {depth + 1}",
-            ))
+            candidates.append(
+                ScoredCandidate(
+                    hash=edge.target,
+                    score=prereq_score,
+                    source_strategy="PrerequisiteChain",
+                    explanation=f"prerequisite at depth {depth + 1}",
+                )
+            )
 
             # Also collect atoms from the prerequisite frame.
             try:
                 atoms = ws.collect_atoms(edge.target)
                 for atom_hash, atom in atoms:
-                    candidates.append(ScoredCandidate(
-                        hash=atom_hash,
-                        score=prereq_score * 0.8,
-                        source_strategy="PrerequisiteChain",
-                        explanation=f"content in prerequisite at depth {depth + 1}",
-                    ))
+                    candidates.append(
+                        ScoredCandidate(
+                            hash=atom_hash,
+                            score=prereq_score * 0.8,
+                            source_strategy="PrerequisiteChain",
+                            explanation=f"content in prerequisite at depth {depth + 1}",
+                        )
+                    )
             except Exception:
                 pass
 
@@ -438,24 +457,28 @@ class InteractionHistory:
             # Score decays with interaction age (earlier edges = older).
             score = max(0.1, 1.0 - interaction_count * 0.1)
 
-            candidates.append(ScoredCandidate(
-                hash=edge.target,
-                score=score,
-                source_strategy="InteractionHistory",
-                explanation=f"past interaction #{interaction_count}",
-            ))
+            candidates.append(
+                ScoredCandidate(
+                    hash=edge.target,
+                    score=score,
+                    source_strategy="InteractionHistory",
+                    explanation=f"past interaction #{interaction_count}",
+                )
+            )
 
             # Get the event and include its inputs/outputs.
             event = ws.get_event(edge.target)
             if event is None:
                 continue
             for ref in event.inputs + event.outputs:
-                candidates.append(ScoredCandidate(
-                    hash=ref.hash,
-                    score=score * 0.6,
-                    source_strategy="InteractionHistory",
-                    explanation=f"referenced in past interaction #{interaction_count} (role={ref.role})",
-                ))
+                candidates.append(
+                    ScoredCandidate(
+                        hash=ref.hash,
+                        score=score * 0.6,
+                        source_strategy="InteractionHistory",
+                        explanation=f"referenced in past interaction #{interaction_count} (role={ref.role})",
+                    )
+                )
 
         return candidates
 
@@ -518,41 +541,55 @@ class RetrievalPolicy:
 # ============================================================================
 
 DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
-    RetrievalIntent.GENERAL: RetrievalPolicy(strategies=[
-        (GraphProximity(), 0.8),
-        (MasteryAware(), 0.5),
-        (TemporalRecency(), 0.3),
-    ]),
-    RetrievalIntent.EXPLAIN_CONCEPT: RetrievalPolicy(strategies=[
-        (GraphProximity(), 0.9),
-        (PrerequisiteChain(), 0.8),
-        (MasteryAware(), 0.6),
-    ]),
-    RetrievalIntent.GENERATE_PROBLEM: RetrievalPolicy(strategies=[
-        (GraphProximity(), 0.7),
-        (MasteryAware(), 0.9),
-    ]),
-    RetrievalIntent.DIAGNOSE_MISCONCEPTION: RetrievalPolicy(strategies=[
-        (InteractionHistory(), 0.9),
-        (MasteryAware(), 0.8),
-        (GraphProximity(), 0.5),
-    ]),
-    RetrievalIntent.ASSESS_MASTERY: RetrievalPolicy(strategies=[
-        (MasteryAware(), 0.9),
-        (InteractionHistory(), 0.7),
-        (GraphProximity(), 0.4),
-    ]),
-    RetrievalIntent.PLAN_LESSON: RetrievalPolicy(strategies=[
-        (GraphProximity(), 0.8),
-        (PrerequisiteChain(), 0.9),
-        (MasteryAware(), 0.7),
-        (TemporalRecency(), 0.3),
-    ]),
-    RetrievalIntent.REVIEW_SESSION_HISTORY: RetrievalPolicy(strategies=[
-        (TemporalRecency(), 0.9),
-        (InteractionHistory(), 0.8),
-        (MasteryAware(), 0.4),
-    ]),
+    RetrievalIntent.GENERAL: RetrievalPolicy(
+        strategies=[
+            (GraphProximity(), 0.8),
+            (MasteryAware(), 0.5),
+            (TemporalRecency(), 0.3),
+        ]
+    ),
+    RetrievalIntent.EXPLAIN_CONCEPT: RetrievalPolicy(
+        strategies=[
+            (GraphProximity(), 0.9),
+            (PrerequisiteChain(), 0.8),
+            (MasteryAware(), 0.6),
+        ]
+    ),
+    RetrievalIntent.GENERATE_PROBLEM: RetrievalPolicy(
+        strategies=[
+            (GraphProximity(), 0.7),
+            (MasteryAware(), 0.9),
+        ]
+    ),
+    RetrievalIntent.DIAGNOSE_MISCONCEPTION: RetrievalPolicy(
+        strategies=[
+            (InteractionHistory(), 0.9),
+            (MasteryAware(), 0.8),
+            (GraphProximity(), 0.5),
+        ]
+    ),
+    RetrievalIntent.ASSESS_MASTERY: RetrievalPolicy(
+        strategies=[
+            (MasteryAware(), 0.9),
+            (InteractionHistory(), 0.7),
+            (GraphProximity(), 0.4),
+        ]
+    ),
+    RetrievalIntent.PLAN_LESSON: RetrievalPolicy(
+        strategies=[
+            (GraphProximity(), 0.8),
+            (PrerequisiteChain(), 0.9),
+            (MasteryAware(), 0.7),
+            (TemporalRecency(), 0.3),
+        ]
+    ),
+    RetrievalIntent.REVIEW_SESSION_HISTORY: RetrievalPolicy(
+        strategies=[
+            (TemporalRecency(), 0.9),
+            (InteractionHistory(), 0.8),
+            (MasteryAware(), 0.4),
+        ]
+    ),
 }
 
 

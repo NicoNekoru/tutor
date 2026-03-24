@@ -1,4 +1,5 @@
 """End-to-end tests for the rlm_ws Python bindings."""
+
 import os
 import tempfile
 import rlm_ws
@@ -155,11 +156,13 @@ def test_events_and_session():
         # Student input
         input_atom = ws.put_atom(rlm_ws.Atom("StudentResponse", "What is recursion?"))
         input_ref = rlm_ws.EventRef(input_atom, "student_message")
-        input_ev = ws.put_event(rlm_ws.Event(
-            "StudentInput",
-            parents=[start],
-            outputs=[input_ref],
-        ))
+        input_ev = ws.put_event(
+            rlm_ws.Event(
+                "StudentInput",
+                parents=[start],
+                outputs=[input_ref],
+            )
+        )
 
         # Model call with trace
         output_atom = ws.put_atom(rlm_ws.Atom("ModelOutput", "Recursion is..."))
@@ -170,20 +173,24 @@ def test_events_and_session():
             output_tokens=200,
             latency_ms=1500,
         )
-        call_ev = ws.put_event(rlm_ws.Event(
-            "ModelCall",
-            parents=[input_ev],
-            inputs=[input_ref],
-            outputs=[rlm_ws.EventRef(output_atom, "model_output")],
-            trace=trace,
-        ))
+        call_ev = ws.put_event(
+            rlm_ws.Event(
+                "ModelCall",
+                parents=[input_ev],
+                inputs=[input_ref],
+                outputs=[rlm_ws.EventRef(output_atom, "model_output")],
+                trace=trace,
+            )
+        )
 
         # Session end
-        end = ws.put_event(rlm_ws.Event(
-            "SessionEnd",
-            parents=[call_ev],
-            tags=["session"],
-        ))
+        end = ws.put_event(
+            rlm_ws.Event(
+                "SessionEnd",
+                parents=[call_ev],
+                tags=["session"],
+            )
+        )
 
         # Walk session chain
         events = ws.session_events(end)
@@ -216,10 +223,15 @@ def test_mastery_and_commit_mutation():
         c2 = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "loops"))
 
         # Initial model
-        model_v1 = ws.put_frame(rlm_ws.Frame("StudentModel", [
-            rlm_ws.Edge("MasteryEstimate", c1, weight=0.0),
-            rlm_ws.Edge("MasteryEstimate", c2, weight=0.0),
-        ]))
+        model_v1 = ws.put_frame(
+            rlm_ws.Frame(
+                "StudentModel",
+                [
+                    rlm_ws.Edge("MasteryEstimate", c1, weight=0.0),
+                    rlm_ws.Edge("MasteryEstimate", c2, weight=0.0),
+                ],
+            )
+        )
         ws.set_ref("student/alice/mastery", model_v1)
 
         mastery = ws.student_mastery_map(model_v1)
@@ -228,20 +240,32 @@ def test_mastery_and_commit_mutation():
             assert level == 0.0
 
         # Update via commit_mutation
-        model_v2 = ws.put_frame(rlm_ws.Frame("StudentModel", [
-            rlm_ws.Edge("MasteryEstimate", c1, weight=0.7,
-                        annotation={"reason": "quiz passed"}),
-            rlm_ws.Edge("MasteryEstimate", c2, weight=0.3),
-        ]))
+        model_v2 = ws.put_frame(
+            rlm_ws.Frame(
+                "StudentModel",
+                [
+                    rlm_ws.Edge(
+                        "MasteryEstimate",
+                        c1,
+                        weight=0.7,
+                        annotation={"reason": "quiz passed"},
+                    ),
+                    rlm_ws.Edge("MasteryEstimate", c2, weight=0.3),
+                ],
+            )
+        )
 
         event = rlm_ws.Event(
             "StudentModelUpdate",
             inputs=[rlm_ws.EventRef(model_v1, "prior")],
             outputs=[rlm_ws.EventRef(model_v2, "updated")],
         )
-        ws.commit_mutation(event, [
-            ("student/alice/mastery", model_v1, model_v2),
-        ])
+        ws.commit_mutation(
+            event,
+            [
+                ("student/alice/mastery", model_v1, model_v2),
+            ],
+        )
 
         assert ws.get_ref_hash("student/alice/mastery") == model_v2
 
@@ -262,12 +286,19 @@ def test_index_queries():
         ws = rlm_ws.Workspace.init(d)
 
         c = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "graphs", tags=["cs"]))
-        p = ws.put_atom(rlm_ws.Atom("ProblemStatement", "BFS problem", tags=["practice"]))
+        p = ws.put_atom(
+            rlm_ws.Atom("ProblemStatement", "BFS problem", tags=["practice"])
+        )
 
-        fh = ws.put_frame(rlm_ws.Frame("Lesson", [
-            rlm_ws.Edge("CoversConcept", c),
-            rlm_ws.Edge("IncludesProblem", p),
-        ]))
+        fh = ws.put_frame(
+            rlm_ws.Frame(
+                "Lesson",
+                [
+                    rlm_ws.Edge("CoversConcept", c),
+                    rlm_ws.Edge("IncludesProblem", p),
+                ],
+            )
+        )
 
         # Reverse edges
         rev = ws.reverse_edges(c)
@@ -311,13 +342,19 @@ def test_gc():
 def test_export_json():
     """JSON export of a subgraph."""
     import json
+
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
 
         c = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "test"))
-        fh = ws.put_frame(rlm_ws.Frame("Lesson", [
-            rlm_ws.Edge("CoversConcept", c),
-        ]))
+        fh = ws.put_frame(
+            rlm_ws.Frame(
+                "Lesson",
+                [
+                    rlm_ws.Edge("CoversConcept", c),
+                ],
+            )
+        )
 
         export_str = ws.export_json(fh)
         data = json.loads(export_str)
@@ -351,12 +388,22 @@ def test_shortest_path():
         ws = rlm_ws.Workspace.init(d)
 
         c = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "target"))
-        lesson = ws.put_frame(rlm_ws.Frame("Lesson", [
-            rlm_ws.Edge("CoversConcept", c),
-        ]))
-        course = ws.put_frame(rlm_ws.Frame("Course", [
-            rlm_ws.Edge("Contains", lesson),
-        ]))
+        lesson = ws.put_frame(
+            rlm_ws.Frame(
+                "Lesson",
+                [
+                    rlm_ws.Edge("CoversConcept", c),
+                ],
+            )
+        )
+        course = ws.put_frame(
+            rlm_ws.Frame(
+                "Course",
+                [
+                    rlm_ws.Edge("Contains", lesson),
+                ],
+            )
+        )
 
         path = ws.shortest_path(course, c, 10)
         assert path is not None

@@ -7,6 +7,14 @@ name = "rlm-ws"
 version = "0.1.0"
 description = "Content-addressable object store for RLM workspaces"
 requires-python = ">=3.9"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "httpx>=0.24",
+]
+
+[project.scripts]
+rlm = "rlm_ws.cli:app"
 
 [tool.maturin]
 features = ["python"]

@@ -26,81 +26,139 @@ def build_course(ws: rlm_ws.Workspace) -> dict:
     """Build a small course for testing and return all hashes."""
 
     # Concepts
-    c_arrays = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "Arrays store elements contiguously"))
-    c_sorting = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "Sorting arranges elements in order"))
-    c_binary = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "Binary search halves the search space"))
-    c_linked = ws.put_atom(rlm_ws.Atom("ConceptDefinition", "Linked lists use pointers"))
+    c_arrays = ws.put_atom(
+        rlm_ws.Atom("ConceptDefinition", "Arrays store elements contiguously")
+    )
+    c_sorting = ws.put_atom(
+        rlm_ws.Atom("ConceptDefinition", "Sorting arranges elements in order")
+    )
+    c_binary = ws.put_atom(
+        rlm_ws.Atom("ConceptDefinition", "Binary search halves the search space")
+    )
+    c_linked = ws.put_atom(
+        rlm_ws.Atom("ConceptDefinition", "Linked lists use pointers")
+    )
 
     # Problems
-    p_find = ws.put_atom(rlm_ws.Atom("ProblemStatement", "Find element in sorted array"))
+    p_find = ws.put_atom(
+        rlm_ws.Atom("ProblemStatement", "Find element in sorted array")
+    )
     p_sort = ws.put_atom(rlm_ws.Atom("ProblemStatement", "Sort an array of integers"))
 
     # Examples
     ex_bs = ws.put_atom(rlm_ws.Atom("WorkedExample", "Binary search step by step"))
 
     # Lessons
-    lesson_arrays = ws.put_frame(rlm_ws.Frame("Lesson", [
-        rlm_ws.Edge("CoversConcept", c_arrays),
-    ], label="Arrays Basics"))
+    lesson_arrays = ws.put_frame(
+        rlm_ws.Frame(
+            "Lesson",
+            [
+                rlm_ws.Edge("CoversConcept", c_arrays),
+            ],
+            label="Arrays Basics",
+        )
+    )
 
-    lesson_sorting = ws.put_frame(rlm_ws.Frame("Lesson", [
-        rlm_ws.Edge("CoversConcept", c_sorting),
-        rlm_ws.Edge("IncludesProblem", p_sort),
-        rlm_ws.Edge("Prerequisite", lesson_arrays),
-    ], label="Sorting"))
+    lesson_sorting = ws.put_frame(
+        rlm_ws.Frame(
+            "Lesson",
+            [
+                rlm_ws.Edge("CoversConcept", c_sorting),
+                rlm_ws.Edge("IncludesProblem", p_sort),
+                rlm_ws.Edge("Prerequisite", lesson_arrays),
+            ],
+            label="Sorting",
+        )
+    )
 
-    lesson_binary = ws.put_frame(rlm_ws.Frame("Lesson", [
-        rlm_ws.Edge("CoversConcept", c_binary),
-        rlm_ws.Edge("IncludesProblem", p_find),
-        rlm_ws.Edge("IncludesExample", ex_bs),
-        rlm_ws.Edge("Prerequisite", lesson_sorting),
-    ], label="Binary Search"))
+    lesson_binary = ws.put_frame(
+        rlm_ws.Frame(
+            "Lesson",
+            [
+                rlm_ws.Edge("CoversConcept", c_binary),
+                rlm_ws.Edge("IncludesProblem", p_find),
+                rlm_ws.Edge("IncludesExample", ex_bs),
+                rlm_ws.Edge("Prerequisite", lesson_sorting),
+            ],
+            label="Binary Search",
+        )
+    )
 
-    lesson_linked = ws.put_frame(rlm_ws.Frame("Lesson", [
-        rlm_ws.Edge("CoversConcept", c_linked),
-    ], label="Linked Lists"))
+    lesson_linked = ws.put_frame(
+        rlm_ws.Frame(
+            "Lesson",
+            [
+                rlm_ws.Edge("CoversConcept", c_linked),
+            ],
+            label="Linked Lists",
+        )
+    )
 
     # Module and course
-    module = ws.put_frame(rlm_ws.Frame("Module", [
-        rlm_ws.Edge("Contains", lesson_arrays),
-        rlm_ws.Edge("Contains", lesson_sorting),
-        rlm_ws.Edge("Contains", lesson_binary),
-        rlm_ws.Edge("Contains", lesson_linked),
-    ], label="Data Structures"))
+    module = ws.put_frame(
+        rlm_ws.Frame(
+            "Module",
+            [
+                rlm_ws.Edge("Contains", lesson_arrays),
+                rlm_ws.Edge("Contains", lesson_sorting),
+                rlm_ws.Edge("Contains", lesson_binary),
+                rlm_ws.Edge("Contains", lesson_linked),
+            ],
+            label="Data Structures",
+        )
+    )
 
-    course = ws.put_frame(rlm_ws.Frame("Course", [
-        rlm_ws.Edge("Contains", module),
-    ], label="Intro CS"))
+    course = ws.put_frame(
+        rlm_ws.Frame(
+            "Course",
+            [
+                rlm_ws.Edge("Contains", module),
+            ],
+            label="Intro CS",
+        )
+    )
     ws.set_ref("course/structure", course)
 
     # Student model — binary search is weak, arrays is strong
-    student_model = ws.put_frame(rlm_ws.Frame("StudentModel", [
-        rlm_ws.Edge("MasteryEstimate", c_arrays, weight=0.9),
-        rlm_ws.Edge("MasteryEstimate", c_sorting, weight=0.6),
-        rlm_ws.Edge("MasteryEstimate", c_binary, weight=0.2),
-        rlm_ws.Edge("MasteryEstimate", c_linked, weight=0.1),
-    ]))
+    student_model = ws.put_frame(
+        rlm_ws.Frame(
+            "StudentModel",
+            [
+                rlm_ws.Edge("MasteryEstimate", c_arrays, weight=0.9),
+                rlm_ws.Edge("MasteryEstimate", c_sorting, weight=0.6),
+                rlm_ws.Edge("MasteryEstimate", c_binary, weight=0.2),
+                rlm_ws.Edge("MasteryEstimate", c_linked, weight=0.1),
+            ],
+        )
+    )
     ws.set_ref("student/alice/mastery", student_model)
 
     # Some session events for temporal/interaction testing
     e_start = ws.put_event(rlm_ws.Event("SessionStart", tags=["session"]))
     e_input = ws.put_event(rlm_ws.Event("StudentInput", parents=[e_start]))
-    e_call = ws.put_event(rlm_ws.Event(
-        "ModelCall",
-        parents=[e_input],
-        inputs=[rlm_ws.EventRef(c_binary, "concept")],
-        outputs=[rlm_ws.EventRef(ex_bs, "explanation")],
-        trace=rlm_ws.CallTrace(call_depth=0, model="test-model"),
-    ))
+    e_call = ws.put_event(
+        rlm_ws.Event(
+            "ModelCall",
+            parents=[e_input],
+            inputs=[rlm_ws.EventRef(c_binary, "concept")],
+            outputs=[rlm_ws.EventRef(ex_bs, "explanation")],
+            trace=rlm_ws.CallTrace(call_depth=0, model="test-model"),
+        )
+    )
 
     # Add interaction record to student model
-    student_model_v2 = ws.put_frame(rlm_ws.Frame("StudentModel", [
-        rlm_ws.Edge("MasteryEstimate", c_arrays, weight=0.9),
-        rlm_ws.Edge("MasteryEstimate", c_sorting, weight=0.6),
-        rlm_ws.Edge("MasteryEstimate", c_binary, weight=0.3),
-        rlm_ws.Edge("MasteryEstimate", c_linked, weight=0.1),
-        rlm_ws.Edge("InteractionRecord", e_call),
-    ]))
+    student_model_v2 = ws.put_frame(
+        rlm_ws.Frame(
+            "StudentModel",
+            [
+                rlm_ws.Edge("MasteryEstimate", c_arrays, weight=0.9),
+                rlm_ws.Edge("MasteryEstimate", c_sorting, weight=0.6),
+                rlm_ws.Edge("MasteryEstimate", c_binary, weight=0.3),
+                rlm_ws.Edge("MasteryEstimate", c_linked, weight=0.1),
+                rlm_ws.Edge("InteractionRecord", e_call),
+            ],
+        )
+    )
     ws.set_ref("student/alice/mastery", student_model_v2)
 
     return {
@@ -188,8 +246,12 @@ def test_mastery_aware():
         binary_score = scores[data["concepts"]["binary"]]
         arrays_score = scores.get(data["concepts"]["arrays"], 0)
 
-        assert linked_score > binary_score  # 0.1 mastery > 0.3 mastery → higher retrieval score
-        assert binary_score > arrays_score  # 0.3 mastery > 0.9 mastery → higher retrieval score
+        assert (
+            linked_score > binary_score
+        )  # 0.1 mastery > 0.3 mastery → higher retrieval score
+        assert (
+            binary_score > arrays_score
+        )  # 0.3 mastery > 0.9 mastery → higher retrieval score
 
         print("  PASS: test_mastery_aware")
 
@@ -260,7 +322,9 @@ def test_prerequisite_chain():
         assert data["lessons"]["arrays"] in hashes
 
         # Content from prerequisite lessons should be included.
-        assert data["concepts"]["sorting"] in hashes or data["problems"]["sort"] in hashes
+        assert (
+            data["concepts"]["sorting"] in hashes or data["problems"]["sort"] in hashes
+        )
 
         print("  PASS: test_prerequisite_chain")
 
@@ -317,11 +381,13 @@ def test_policy_merges_strategies():
             max_results=10,
         )
 
-        policy = RetrievalPolicy(strategies=[
-            (GraphProximity(), 0.9),
-            (PrerequisiteChain(), 0.8),
-            (MasteryAware(), 0.6),
-        ])
+        policy = RetrievalPolicy(
+            strategies=[
+                (GraphProximity(), 0.9),
+                (PrerequisiteChain(), 0.8),
+                (MasteryAware(), 0.6),
+            ]
+        )
 
         results = policy.execute(query, ws)
 
@@ -402,9 +468,11 @@ def test_retrieve_custom_policy():
         )
 
         # Custom policy with only GraphProximity.
-        custom = RetrievalPolicy(strategies=[
-            (GraphProximity(max_depth=2, decay=0.5), 1.0),
-        ])
+        custom = RetrievalPolicy(
+            strategies=[
+                (GraphProximity(max_depth=2, decay=0.5), 1.0),
+            ]
+        )
 
         results = retrieve(query, ws, policy=custom)
 
@@ -432,10 +500,12 @@ def test_failing_strategy_doesnt_crash():
             focus_concepts=[data["concepts"]["binary"]],
         )
 
-        policy = RetrievalPolicy(strategies=[
-            (BrokenStrategy(), 1.0),
-            (GraphProximity(), 0.8),
-        ])
+        policy = RetrievalPolicy(
+            strategies=[
+                (BrokenStrategy(), 1.0),
+                (GraphProximity(), 0.8),
+            ]
+        )
 
         # Should succeed — BrokenStrategy is skipped.
         results = policy.execute(query, ws)
