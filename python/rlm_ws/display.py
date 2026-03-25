@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
 from rich.text import Text
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 from rich.markdown import Markdown
 
 console = Console()
@@ -65,9 +65,8 @@ def object_counts_display(atoms: int, frames: int, events: int) -> None:
 
 def course_tree(ws, course_hash) -> None:
     """Display the course structure as a tree."""
-    from .rlm_ws import Workspace
 
-    tree = Tree(f"[bold]Course[/bold]")
+    tree = Tree("[bold]Course[/bold]")
     _build_tree(ws, course_hash, tree, depth=0, max_depth=4)
     console.print(tree)
 

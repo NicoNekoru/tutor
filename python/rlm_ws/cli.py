@@ -2,7 +2,7 @@
 rlm-ws: Command-line interface for RLM workspaces.
 
 Usage:
-    rlm-ws init [PATH]           # Initialize a new workspace
+    rlm-ws init [NAME]           # Initialize a new workspace (guided)
     rlm-ws ingest <FILES>        # Ingest markdown course materials
     rlm-ws session               # Start an interactive tutoring session
     rlm-ws inspect               # Inspect workspace state
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.prompt import Prompt
 
 from . import display
 from .rlm_ws import Workspace
@@ -33,7 +34,6 @@ def _resolve_workspace(path: Path | None) -> Workspace:
     if path:
         return Workspace.open(str(path))
 
-    # Search upward for .rlm directory.
     current = Path.cwd()
     while True:
         if (current / ".rlm").is_dir():
@@ -54,66 +54,150 @@ def _resolve_workspace(path: Path | None) -> Workspace:
 
 @app.command()
 def init(
-    path: Optional[Path] = typer.Argument(
+    name: Optional[str] = typer.Argument(
         None,
-        help="Directory for the workspace. Defaults to current directory.",
+        help=(
+            "Course name. Creates a directory with this name (like 'cargo init'). "
+            "Use '.' to initialize in the current directory."
+        ),
     ),
-    name: Optional[str] = typer.Option(
+    template: Optional[str] = typer.Option(
         None,
-        "--name",
-        "-n",
-        help="Course name. If omitted, prompted interactively.",
+        "--template",
+        "-t",
+        help="Template directory name. If omitted, prompted interactively.",
     ),
-    ingest_from: Optional[Path] = typer.Option(
+    templates_dir: Optional[Path] = typer.Option(
         None,
-        "--ingest",
-        "-i",
-        help="Path to markdown files to ingest immediately after init.",
+        "--templates-dir",
+        help="Additional directory to search for templates.",
+        envvar="RLM_TEMPLATES_DIR",
+    ),
+    no_ingest: bool = typer.Option(
+        False,
+        "--no-ingest",
+        help="Skip automatic ingestion of template content.",
     ),
 ):
     """Initialize a new RLM workspace.
 
-    Creates a .rlm/ directory at the given path (or cwd) with the object
-    store, refs, and index. Optionally ingests course materials.
-    """
-    ws_path = path or Path.cwd()
+    Creates a workspace directory with course content ready to use.
 
-    if (ws_path / ".rlm").exists():
-        display.error(f"Workspace already exists at {ws_path}")
-        raise typer.Exit(1)
+    \b
+    Templates are directories containing a template.json and course files.
+    Searched in: --templates-dir, $RLM_TEMPLATES_DIR, then built-in templates.
+
+    \b
+    Examples:
+      rlm-ws init my-course                # guided setup
+      rlm-ws init . -t algorithms          # current dir, algorithms template
+      rlm-ws init "Linear Algebra"         # creates ./linear-algebra/
+      rlm-ws init x -t my-tmpl --templates-dir ~/templates
+    """
+    from .templates import discover_templates, apply_template
 
     display.header("rlm-ws", "Initialize a new workspace")
 
-    # Interactive prompts if not provided.
+    # --- Resolve name and directory ---
+
     if name is None:
-        from rich.prompt import Prompt
+        name = Prompt.ask("Course name")
 
-        name = Prompt.ask(
-            "Course name",
-            default=ws_path.name,
-        )
+    if name == ".":
+        ws_dir = Path.cwd()
+        course_name = Prompt.ask("Course name", default=ws_dir.name)
+    else:
+        course_name = name
+        dir_name = name.lower().replace(" ", "-")
+        dir_name = "".join(c for c in dir_name if c.isalnum() or c == "-")
+        ws_dir = Path.cwd() / dir_name
 
-    ws = Workspace.init(str(ws_path))
-    display.success(f"Workspace created at {ws_path / '.rlm'}")
+    # --- Check directory state ---
 
-    # Ingest if requested.
-    if ingest_from:
-        from .ingest import ingest_directory, ingest_file
+    if (ws_dir / ".rlm").exists():
+        display.error(f"Workspace already exists at {ws_dir}")
+        raise typer.Exit(1)
 
-        ingest_path = ingest_from.resolve()
-        if ingest_path.is_dir():
-            ingest_directory(ws, ingest_path, course_name=name or "")
-        elif ingest_path.is_file():
-            ingest_file(ws, ingest_path, course_name=name or "")
-        else:
-            display.error(f"Path not found: {ingest_from}")
+    if ws_dir.exists() and any(ws_dir.iterdir()):
+        if name != ".":
+            display.error(f"Directory '{ws_dir}' already exists and is not empty.")
             raise typer.Exit(1)
+        display.warn(f"Initializing in non-empty directory: {ws_dir}")
+
+    # --- Discover and choose template ---
+
+    templates = discover_templates(templates_dir)
+
+    if template is None:
+        display.console.print()
+        display.console.print("[bold]Choose a starting point:[/bold]")
+        display.console.print()
+
+        keys = list(templates.keys())
+        for i, key in enumerate(keys, 1):
+            tmpl = templates[key]
+            display.console.print(
+                f"  [cyan]{i}[/cyan]  [bold]{tmpl.name}[/bold] — {tmpl.description}"
+            )
+        empty_idx = len(keys) + 1
+        display.console.print(
+            f"  [cyan]{empty_idx}[/cyan]  [bold]Empty[/bold] — just the workspace, no content"
+        )
+        display.console.print()
+
+        choices = [str(i) for i in range(1, empty_idx + 1)]
+        choice = Prompt.ask("Select", choices=choices, default="1")
+        idx = int(choice)
+        if idx <= len(keys):
+            template = keys[idx - 1]
+        else:
+            template = "empty"
+
+    if template != "empty" and template not in templates:
+        available = ", ".join(templates.keys()) or "(none found)"
+        display.error(f"Unknown template: '{template}'. Available: {available}, empty")
+        raise typer.Exit(1)
+
+    # --- Create workspace ---
+
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    ws = Workspace.init(str(ws_dir))
+    display.success(f"Workspace created at {ws_dir / '.rlm'}")
+
+    # --- Apply template ---
+
+    if template != "empty":
+        tmpl = templates[template]
+        written = apply_template(tmpl, ws_dir, course_name)
+        for p in written:
+            display.info(f"Created {p.relative_to(ws_dir)}")
+
+        # Ingest content/ if present.
+        if not no_ingest:
+            content_dir = ws_dir / "content"
+            if content_dir.is_dir():
+                from .ingest import ingest_directory
+
+                display.console.print()
+                ingest_directory(ws, content_dir, course_name=course_name)
+
+    # --- Summary ---
 
     display.console.print()
-    display.info("Next steps:")
-    display.info("  rlm-ws ingest <markdown-files>   — add course materials")
-    display.info("  rlm-ws session                   — start tutoring")
-    display.info("  rlm-ws inspect                   — view workspace")
+    atoms, frames, events = ws.object_counts()
+    if atoms + frames + events > 0:
+        display.object_counts_display(atoms, frames, events)
+        display.console.print()
+        display.success("Workspace is ready!")
+        display.info(f"  cd {ws_dir.name}")
+        display.info("  rlm-ws session                   — start tutoring")
+        display.info("  rlm-ws inspect --tree             — view course structure")
+    else:
+        display.info("Workspace initialized (empty).")
+        display.info(f"  cd {ws_dir.name}")
+        display.info("  # Add .md files to content/, then:")
+        display.info("  rlm-ws ingest content/            — parse course materials")
+        display.info("  rlm-ws session                    — start tutoring")
 
 
 # ============================================================================
@@ -142,15 +226,7 @@ def ingest(
 ):
     """Ingest markdown course materials into the workspace.
 
-    Parses markdown files following the rlm-ws convention:
-
-    \b
-      # Module Name
-      ## Lesson Name
-      ### Concept: Name
-      ### Problem: Name
-      ### Example: Name
-      <!-- prerequisite: Other Lesson -->
+    See COURSE_FORMAT.md (created during init) for the markdown format.
     """
     ws = _resolve_workspace(workspace)
     from .ingest import ingest_directory, ingest_file
@@ -164,7 +240,6 @@ def ingest(
         else:
             display.error(f"Not found: {p}")
 
-    # Show result.
     atoms, frames, events = ws.object_counts()
     display.object_counts_display(atoms, frames, events)
 
@@ -208,10 +283,8 @@ def session(
 ):
     """Start an interactive tutoring session.
 
-    Enters a REPL where you can ask questions and get tutored. The system
-    retrieves relevant course context and tracks your mastery over time.
-
-    Commands available during the session:
+    \b
+    In-session commands:
       /mastery  — show current mastery levels
       /tree     — show course structure
       /status   — show workspace statistics
@@ -219,7 +292,6 @@ def session(
     """
     ws = _resolve_workspace(workspace)
 
-    # Verify course exists.
     if ws.get_ref_hash("course/structure") is None:
         display.error("No course ingested. Run 'rlm-ws ingest' first.")
         raise typer.Exit(1)
@@ -262,14 +334,10 @@ def inspect(
     ),
     counts: bool = typer.Option(False, "--counts", "-c", help="Show object counts."),
 ):
-    """Inspect the workspace state.
-
-    With no flags, shows a summary. Use flags to drill into specific views.
-    """
+    """Inspect the workspace state. With no flags, shows a summary."""
     ws = _resolve_workspace(workspace)
 
     if not any([refs, tree, mastery, counts]):
-        # Default: show everything.
         refs = tree = counts = True
 
     if counts:
@@ -318,11 +386,7 @@ def gc(
         help="Also rebuild the secondary index.",
     ),
 ):
-    """Run garbage collection on the workspace.
-
-    Removes objects not reachable from any ref. Optionally rebuilds the
-    secondary index from scratch.
-    """
+    """Run garbage collection on the workspace."""
     ws = _resolve_workspace(workspace)
 
     total, reachable, removed = ws.gc()
@@ -358,15 +422,11 @@ def export(
         help="Output file. Defaults to stdout.",
     ),
 ):
-    """Export a subgraph as JSON.
-
-    Exports all objects reachable from the given ref or hash.
-    """
+    """Export a subgraph as JSON."""
     from .rlm_ws import Hash
 
     ws = _resolve_workspace(workspace)
 
-    # Try as ref name first, then as hex hash.
     target = ws.get_ref_hash(ref)
     if target is None:
         try:

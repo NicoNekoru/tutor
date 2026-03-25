@@ -11,19 +11,34 @@ The Rust core provides the storage engine. Python bindings (via PyO3) expose the
 ```bash
 # Requires: Rust toolchain (rustup), Python 3.10+, uv
 git clone <repo> && cd rlm-ws
-uv sync
-uv pip install maturin
-uv run maturin develop
+make setup       # creates venv, installs deps, builds the native Rust module
+make test        # runs Rust + Python tests
+```
+
+Or manually:
+
+```bash
+uv venv .venv
+source .venv/bin/activate
+uv pip install maturin pytest
+maturin develop              # builds Rust → installs native module into venv
+pytest -v                    # 37 Python tests
 ```
 
 ### CLI quickstart
 
 ```bash
-# Initialize a workspace
-rlm-ws init ./my-course --name "Intro to Algorithms"
+# Initialize a workspace (guided — pick a template)
+rlm-ws init my-course
 
-# Ingest course materials (markdown)
-rlm-ws ingest examples/algorithms-course.md
+# Or non-interactively with a specific template
+rlm-ws init my-course --template algorithms
+
+# Use a custom template from your own directory
+rlm-ws init my-course --template calculus --templates-dir ~/my-templates
+
+# Ingest additional content
+rlm-ws ingest content/extra-topics.md
 
 # Inspect the workspace
 rlm-ws inspect
@@ -202,16 +217,26 @@ Each `RetrievalIntent` maps to a default policy that weights these strategies. C
 # Clone and enter the project
 git clone <repo> && cd rlm-ws
 
-# Rust: check, lint, test (no Python needed — pybridge is feature-gated)
+# Everything at once
+make setup       # venv + deps + native build
+make test        # cargo test + clippy + pytest
+
+# Or step by step:
+
+# Rust (no venv needed — pybridge is feature-gated)
 cargo clippy --all-targets   # must be zero warnings (deny(warnings) is set)
 cargo test                   # 69 tests: 66 unit + 3 integration
 
-# Python: venv, build, test (maturin activates the "python" feature automatically)
-uv sync
-uv pip install maturin
-uv run maturin develop              # builds Rust + pybridge → installs as Python native module
-uv run python tests/test_python.py  # 12 tests
+# Python (activate venv, then run directly — not via uv run)
+uv venv .venv
+source .venv/bin/activate
+uv pip install maturin pytest
+maturin develop              # builds Rust + pybridge → installs native module
+pytest -v                    # 37 tests across 3 test files
 ```
+
+**Note:** `uv run` does not work reliably with maturin-backed native extension
+projects. Always activate the venv and run commands directly.
 
 ### Project layout
 
@@ -230,21 +255,22 @@ src/                            ← Rust core (plumbing)
 └── pybridge.rs                 ← PyO3 bindings (feature-gated behind "python")
 
 python/rlm_ws/                  ← Python porcelain layer
-├── __init__.py                 ← re-exports native types + retrieval + CLI
+├── __init__.py                 ← re-exports native types + retrieval
 ├── retrieval.py                ← retrieval strategies, policies, composition
 ├── ingest.py                   ← markdown course parser → workspace objects
 ├── session.py                  ← interactive tutoring session (RLM execution loop)
 ├── display.py                  ← rich terminal formatting helpers
+├── templates.py                ← template discovery and application logic
+├── _template_data/             ← built-in template directories
+│   ├── starter/                ← minimal skeleton (template.json + content/)
+│   └── algorithms/             ← sample algorithms course
 └── cli.py                      ← typer CLI (init, ingest, session, inspect, gc, export)
-
-examples/
-└── algorithms-course.md        ← sample course in the ingestion markdown format
 
 tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (15 tests)
-└── test_cli.py                 ← CLI, ingestion, and session tests (6 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (10 tests)
 ```
 
 ### Lint policy

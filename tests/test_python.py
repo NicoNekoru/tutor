@@ -1,6 +1,5 @@
 """End-to-end tests for the rlm_ws Python bindings."""
 
-import os
 import tempfile
 import rlm_ws
 
@@ -448,4 +447,4 @@ if __name__ == "__main__":
     test_persistence()
     test_shortest_path()
     test_object_counts()
-    print(f"\nAll 12 tests passed!")
+    print("\nAll 12 tests passed!")

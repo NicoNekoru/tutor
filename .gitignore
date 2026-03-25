@@ -4,3 +4,4 @@
 .venv
 __pycache__
 *cpython*
+*dylib.dSYM*

@@ -568,4 +568,4 @@ if __name__ == "__main__":
     test_failing_strategy_doesnt_crash()
     test_empty_query()
     test_scored_candidate_fields()
-    print(f"\nAll 15 tests passed!")
+    print("\nAll 15 tests passed!")
