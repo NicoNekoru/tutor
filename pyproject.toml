@@ -6,17 +6,27 @@ build-backend = "maturin"
 name = "rlm-ws"
 version = "0.1.0"
 description = "Content-addressable object store for RLM workspaces"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "typer>=0.9",
     "rich>=13.0",
-    "httpx>=0.24",
+    "httpx>=0.25",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
-rlm = "rlm_ws.cli:app"
+rlm-ws = "rlm_ws.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.maturin]
 features = ["python"]
 python-source = "python"
 module-name = "rlm_ws.rlm_ws"
+include = [
+    { path = "python/rlm_ws/_template_data/**/*", format = "sdist" },
+    { path = "python/rlm_ws/_template_data/**/*", format = "wheel" },
+]

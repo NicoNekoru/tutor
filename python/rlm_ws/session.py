@@ -15,7 +15,6 @@ Model calls use httpx to hit OpenRouter (or any OpenAI-compatible endpoint).
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass, field

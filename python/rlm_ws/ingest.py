@@ -42,7 +42,7 @@ from . import display
 class ParsedAtom:
     kind: str
     name: str
-    text: str
+    text: str = ""
     tags: list[str] = field(default_factory=list)
 
 
