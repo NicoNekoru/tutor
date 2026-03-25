@@ -1,13 +1,5 @@
 """
 rlm-ws: Command-line interface for RLM workspaces.
-
-Usage:
-    rlm-ws init [NAME]           # Initialize a new workspace (guided)
-    rlm-ws ingest <FILES>        # Ingest markdown course materials
-    rlm-ws session               # Start an interactive tutoring session
-    rlm-ws inspect               # Inspect workspace state
-    rlm-ws gc                    # Garbage collection
-    rlm-ws export                # Export subgraph as JSON
 """
 
 from __future__ import annotations
@@ -29,15 +21,19 @@ app = typer.Typer(
 )
 
 
-def _resolve_workspace(path: Path | None) -> Workspace:
-    """Find and open a workspace, searching upward from cwd if no path given."""
+def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
+    """Find and open a workspace, searching upward from cwd if no path given.
+
+    Returns (Workspace, ws_dir) so callers can load workspace.toml.
+    """
     if path:
-        return Workspace.open(str(path))
+        resolved = path.resolve()
+        return Workspace.open(str(resolved)), resolved
 
     current = Path.cwd()
     while True:
         if (current / ".rlm").is_dir():
-            return Workspace.open(str(current))
+            return Workspace.open(str(current)), current
         parent = current.parent
         if parent == current:
             break
@@ -57,15 +53,15 @@ def init(
     name: Optional[str] = typer.Argument(
         None,
         help=(
-            "Course name. Creates a directory with this name (like 'cargo init'). "
-            "Use '.' to initialize in the current directory."
+            "Course name. Creates a directory with this name. "
+            "Use '.' for current directory."
         ),
     ),
     template: Optional[str] = typer.Option(
         None,
         "--template",
         "-t",
-        help="Template directory name. If omitted, prompted interactively.",
+        help="Template name. If omitted, prompted interactively.",
     ),
     templates_dir: Optional[Path] = typer.Option(
         None,
@@ -81,20 +77,18 @@ def init(
 ):
     """Initialize a new RLM workspace.
 
-    Creates a workspace directory with course content ready to use.
-
     \b
-    Templates are directories containing a template.json and course files.
-    Searched in: --templates-dir, $RLM_TEMPLATES_DIR, then built-in templates.
-
-    \b
-    Examples:
-      rlm-ws init my-course                # guided setup
-      rlm-ws init . -t algorithms          # current dir, algorithms template
-      rlm-ws init "Linear Algebra"         # creates ./linear-algebra/
-      rlm-ws init x -t my-tmpl --templates-dir ~/templates
+    Walks you through configuring the learning relationship:
+    who the student is, who the tutor is, what the focus should be.
+    Answers are saved to workspace.toml and shape every session.
     """
-    from .templates import discover_templates, apply_template
+    from .templates import (
+        discover_templates,
+        apply_template,
+        run_prompts,
+        build_system_prompt,
+        save_workspace_config,
+    )
 
     display.header("rlm-ws", "Initialize a new workspace")
 
@@ -141,7 +135,7 @@ def init(
             )
         empty_idx = len(keys) + 1
         display.console.print(
-            f"  [cyan]{empty_idx}[/cyan]  [bold]Empty[/bold] — just the workspace, no content"
+            f"  [cyan]{empty_idx}[/cyan]  [bold]Empty[/bold] — just the workspace, no template"
         )
         display.console.print()
 
@@ -158,17 +152,37 @@ def init(
         display.error(f"Unknown template: '{template}'. Available: {available}, empty")
         raise typer.Exit(1)
 
+    # --- Run template prompts ---
+
+    answers: dict[str, str] = {"course_name": course_name}
+    system_prompt = ""
+    selected_template = None
+
+    if template != "empty":
+        selected_template = templates[template]
+        answers = run_prompts(selected_template, course_name)
+        system_prompt = build_system_prompt(selected_template, answers)
+
     # --- Create workspace ---
 
     ws_dir.mkdir(parents=True, exist_ok=True)
     ws = Workspace.init(str(ws_dir))
     display.success(f"Workspace created at {ws_dir / '.rlm'}")
 
-    # --- Apply template ---
+    # --- Save configuration ---
 
-    if template != "empty":
-        tmpl = templates[template]
-        written = apply_template(tmpl, ws_dir, course_name)
+    config_path = save_workspace_config(
+        ws_dir,
+        template or "empty",
+        answers,
+        system_prompt,
+    )
+    display.info(f"Configuration saved to {config_path.name}")
+
+    # --- Apply template files ---
+
+    if selected_template is not None:
+        written = apply_template(selected_template, ws_dir, course_name)
         for p in written:
             display.info(f"Created {p.relative_to(ws_dir)}")
 
@@ -215,7 +229,6 @@ def ingest(
         None,
         "--workspace",
         "-w",
-        help="Workspace path. Searches upward from cwd if omitted.",
     ),
     name: Optional[str] = typer.Option(
         None,
@@ -224,11 +237,8 @@ def ingest(
         help="Course name override.",
     ),
 ):
-    """Ingest markdown course materials into the workspace.
-
-    See COURSE_FORMAT.md (created during init) for the markdown format.
-    """
-    ws = _resolve_workspace(workspace)
+    """Ingest markdown course materials into the workspace."""
+    ws, ws_dir = _resolve_workspace(workspace)
     from .ingest import ingest_directory, ingest_file
 
     for p in paths:
@@ -251,34 +261,17 @@ def ingest(
 
 @app.command()
 def session(
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace path.",
-    ),
-    student: str = typer.Option(
-        "default",
-        "--student",
-        "-s",
-        help="Student identifier.",
-    ),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    student: str = typer.Option("default", "--student", "-s"),
     model: str = typer.Option(
         "anthropic/claude-sonnet-4-20250514",
         "--model",
         "-m",
-        help="Model to use (OpenRouter model string).",
     ),
-    api_key: Optional[str] = typer.Option(
-        None,
-        "--api-key",
-        "-k",
-        help="API key. Defaults to OPENROUTER_API_KEY env var.",
-    ),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k"),
     api_base: str = typer.Option(
         "https://openrouter.ai/api/v1",
         "--api-base",
-        help="API base URL.",
     ),
 ):
     """Start an interactive tutoring session.
@@ -290,7 +283,7 @@ def session(
       /status   — show workspace statistics
       /quit     — end session
     """
-    ws = _resolve_workspace(workspace)
+    ws, ws_dir = _resolve_workspace(workspace)
 
     if ws.get_ref_hash("course/structure") is None:
         display.error("No course ingested. Run 'rlm-ws ingest' first.")
@@ -303,6 +296,7 @@ def session(
         model=model,
         api_key=api_key or "",
         api_base=api_base,
+        ws_dir=ws_dir,
     )
 
     display.header("rlm-ws", f"Tutoring session • student: {student}")
@@ -316,26 +310,14 @@ def session(
 
 @app.command()
 def inspect(
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace path.",
-    ),
-    refs: bool = typer.Option(False, "--refs", "-r", help="Show all refs."),
-    tree: bool = typer.Option(
-        False, "--tree", "-t", help="Show course structure tree."
-    ),
-    mastery: Optional[str] = typer.Option(
-        None,
-        "--mastery",
-        "-m",
-        help="Show mastery for a student ID.",
-    ),
-    counts: bool = typer.Option(False, "--counts", "-c", help="Show object counts."),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    refs: bool = typer.Option(False, "--refs", "-r"),
+    tree: bool = typer.Option(False, "--tree", "-t"),
+    mastery: Optional[str] = typer.Option(None, "--mastery", "-m"),
+    counts: bool = typer.Option(False, "--counts", "-c"),
 ):
     """Inspect the workspace state. With no flags, shows a summary."""
-    ws = _resolve_workspace(workspace)
+    ws, ws_dir = _resolve_workspace(workspace)
 
     if not any([refs, tree, mastery, counts]):
         refs = tree = counts = True
@@ -368,65 +350,35 @@ def inspect(
 
 
 # ============================================================================
-# gc
+# gc / export
 # ============================================================================
 
 
 @app.command()
 def gc(
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace path.",
-    ),
-    rebuild_index: bool = typer.Option(
-        False,
-        "--rebuild-index",
-        help="Also rebuild the secondary index.",
-    ),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    rebuild_index: bool = typer.Option(False, "--rebuild-index"),
 ):
     """Run garbage collection on the workspace."""
-    ws = _resolve_workspace(workspace)
-
+    ws, ws_dir = _resolve_workspace(workspace)
     total, reachable, removed = ws.gc()
     display.success(f"GC complete: {removed} object(s) removed")
     display.info(f"  Total: {total}, Reachable: {reachable}, Removed: {removed}")
-
     if rebuild_index:
         count = ws.rebuild_index()
         display.success(f"Index rebuilt: {count} object(s) indexed")
 
 
-# ============================================================================
-# export
-# ============================================================================
-
-
 @app.command()
 def export(
-    ref: str = typer.Argument(
-        ...,
-        help="Ref name or hex hash to export from.",
-    ),
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace path.",
-    ),
-    output: Optional[Path] = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output file. Defaults to stdout.",
-    ),
+    ref: str = typer.Argument(..., help="Ref name or hex hash."),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o"),
 ):
     """Export a subgraph as JSON."""
     from .rlm_ws import Hash
 
-    ws = _resolve_workspace(workspace)
-
+    ws, ws_dir = _resolve_workspace(workspace)
     target = ws.get_ref_hash(ref)
     if target is None:
         try:
@@ -434,9 +386,7 @@ def export(
         except Exception:
             display.error(f"'{ref}' is not a valid ref name or hash")
             raise typer.Exit(1)
-
     json_str = ws.export_json(target)
-
     if output:
         output.write_text(json_str, encoding="utf-8")
         display.success(f"Exported to {output}")

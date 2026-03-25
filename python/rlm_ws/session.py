@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -54,11 +55,9 @@ class SessionConfig:
     def __post_init__(self):
         if not self.api_key:
             self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not self.system_prompt:
-            self.system_prompt = DEFAULT_SYSTEM_PROMPT
 
 
-DEFAULT_SYSTEM_PROMPT = """You are a patient, knowledgeable tutor. Your role is to help the student understand concepts deeply, not just memorize facts.
+FALLBACK_SYSTEM_PROMPT = """You are a patient, knowledgeable tutor. Your role is to help the student understand concepts deeply, not just memorize facts.
 
 Guidelines:
 - Start from what the student knows and build on it.
@@ -86,6 +85,20 @@ class SessionState:
 
 def start_session(ws: Workspace, config: SessionConfig) -> SessionState:
     """Start a new tutoring session."""
+    # Load system prompt from workspace.toml if not explicitly provided.
+    if not config.system_prompt:
+        from .templates import load_workspace_config
+
+        ws_dir = Path(ws.root_path)
+        ws_config = load_workspace_config(ws_dir)
+        saved_prompt = ws_config.get("system_prompt", {}).get("content", "")
+        if saved_prompt.strip():
+            config.system_prompt = saved_prompt
+            display.info("Loaded system prompt from workspace.toml")
+
+    if not config.system_prompt:
+        config.system_prompt = FALLBACK_SYSTEM_PROMPT
+
     state = SessionState(ws=ws, config=config)
 
     # Resolve or create student model.

@@ -1,0 +1,99 @@
+[template]
+name = "Starter"
+description = "A flexible workspace — you define the learning relationship"
+
+# ============================================================================
+# Prompts: asked during `rlm-ws init` to configure the workspace.
+#
+# Each [[prompts]] entry becomes a question. Supported types:
+#   text     — free-text input (multiline if help suggests it)
+#   confirm  — yes/no (default is a boolean)
+#   choice   — pick from options (defined in `choices`)
+#
+# Answers are saved to workspace.toml and interpolated into the system prompt.
+# ============================================================================
+
+[[prompts]]
+key = "student_identity"
+question = "Who am I?"
+type = "text"
+help = "Describe the student — background, experience level, goals"
+required = true
+
+[[prompts]]
+key = "tutor_identity"
+question = "Who are you?"
+type = "text"
+help = "Describe the tutor persona — expertise, style, personality"
+required = true
+
+[[prompts]]
+key = "relationship"
+question = "What is our relationship?"
+type = "text"
+help = "How do the student and tutor relate? (e.g., casual mentorship, formal instruction)"
+default = ""
+
+[[prompts]]
+key = "syllabus"
+question = "Do you want a syllabus?"
+type = "confirm"
+default = true
+
+[[prompts]]
+key = "formal_assignments"
+question = "Should we have formal assignments?"
+type = "confirm"
+default = false
+
+[[prompts]]
+key = "focus"
+question = "What should the focus be?"
+type = "text"
+help = "The primary learning objective or skill to develop"
+required = true
+
+[[prompts]]
+key = "context"
+question = "Any other context?"
+type = "text"
+help = "Additional constraints, preferences, or structure"
+default = ""
+
+# ============================================================================
+# System prompt template.
+#
+# {{key}} placeholders are replaced with prompt answers.
+# {{course_name}} is always available.
+# For confirm prompts, the value is "yes" or "no".
+# ============================================================================
+
+[system_prompt]
+template = """You are a tutor in a one-on-one learning environment.
+
+## Identities
+
+Student: {{student_identity}}
+Tutor: {{tutor_identity}}
+Relationship: {{relationship}}
+
+## Structure
+
+Course: {{course_name}}
+Focus: {{focus}}
+Syllabus: {{syllabus}}
+Formal assignments: {{formal_assignments}}
+
+## Additional Context
+
+{{context}}
+
+## Guidelines
+
+- Calibrate your explanations to the student's described background.
+- Stay in character as the described tutor persona.
+- Use the relationship context to set the right tone.
+- When the student demonstrates understanding, note it.
+- When the student struggles, adapt your approach.
+
+You will receive context about course materials and the student's mastery levels. Use this to inform your responses."""

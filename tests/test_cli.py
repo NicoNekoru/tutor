@@ -280,6 +280,61 @@ def test_session_retrieval_integration():
         print("  PASS: test_session_retrieval_integration")
 
 
+def test_workspace_toml_system_prompt():
+    """Verify workspace.toml system prompt flows into the session."""
+    from rlm_ws.templates import (
+        discover_templates,
+        apply_template,
+        build_system_prompt,
+        save_workspace_config,
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        ws_dir = Path(d) / "ws"
+        ws_dir.mkdir()
+        ws = rlm_ws.Workspace.init(str(ws_dir))
+
+        # Simulate what init does: apply template, build and save system prompt.
+        templates = discover_templates()
+        tmpl = templates["starter"]
+        apply_template(tmpl, ws_dir, "Test Course")
+
+        # Simulate answers (normally interactive).
+        answers = {
+            "course_name": "Test Course",
+            "student_identity": "A beginner",
+            "tutor_identity": "A professor",
+            "relationship": "Casual",
+            "syllabus": "no",
+            "formal_assignments": "no",
+            "focus": "Understanding basics",
+            "context": "",
+        }
+        system_prompt = build_system_prompt(tmpl, answers)
+        save_workspace_config(ws_dir, "starter", answers, system_prompt)
+
+        # Verify workspace.toml was written.
+        assert (ws_dir / "workspace.toml").exists()
+
+        # Ingest content.
+        from rlm_ws.ingest import ingest_directory
+
+        ingest_directory(ws, ws_dir / "content", course_name="Test Course")
+
+        # Start session — should load from workspace.toml.
+        config = SessionConfig(student_id="toml-test", api_key="", ws_dir=ws_dir)
+        state = start_session(ws, config)
+
+        # The system prompt should contain our configured identities.
+        assert "A beginner" in state.config.system_prompt
+        assert "A professor" in state.config.system_prompt
+        assert "Understanding basics" in state.config.system_prompt
+
+        end_session(state)
+
+        print("  PASS: test_workspace_toml_system_prompt")
+
+
 if __name__ == "__main__":
     print("Running CLI and session tests...")
     test_discover_bundled_templates()
@@ -292,4 +347,5 @@ if __name__ == "__main__":
     test_prerequisite_resolution()
     test_session_offline()
     test_session_retrieval_integration()
-    print("\nAll 10 tests passed!")
+    test_workspace_toml_system_prompt()
+    print("\nAll 11 tests passed!")

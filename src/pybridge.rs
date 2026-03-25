@@ -855,6 +855,11 @@ impl PyWorkspace {
         self.inner.index.object_counts().map_err(to_pyerr)
     }
 
+    #[getter]
+    fn root_path(&self) -> String {
+        self.inner.root().display().to_string()
+    }
+
     fn __repr__(&self) -> String {
         format!("Workspace({:?})", self.inner.root().display())
     }
