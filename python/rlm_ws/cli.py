@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
+from rich.panel import Panel
 
 from . import display
 from .rlm_ws import Workspace
@@ -22,10 +23,7 @@ app = typer.Typer(
 
 
 def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
-    """Find and open a workspace, searching upward from cwd if no path given.
-
-    Returns (Workspace, ws_dir) so callers can load workspace.toml.
-    """
+    """Find and open a workspace. Returns (Workspace, ws_dir)."""
     if path:
         resolved = path.resolve()
         return Workspace.open(str(resolved)), resolved
@@ -44,6 +42,122 @@ def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
 
 
 # ============================================================================
+# auth
+# ============================================================================
+
+
+@app.command()
+def auth(
+    provider: Optional[str] = typer.Argument(
+        None,
+        help="Provider to configure: openrouter, openai, anthropic",
+    ),
+    show: bool = typer.Option(False, "--show", "-s", help="Show saved keys."),
+    set_default: Optional[str] = typer.Option(
+        None,
+        "--default",
+        "-d",
+        help="Set default provider.",
+    ),
+):
+    """Manage API keys for model providers.
+
+    \b
+    Keys are stored in ~/.config/rlm-ws/auth.toml (never in the workspace).
+
+    \b
+    Examples:
+      rlm-ws auth                    # guided setup
+      rlm-ws auth openrouter         # configure OpenRouter
+      rlm-ws auth --show             # show saved keys
+      rlm-ws auth --default openai   # set default provider
+    """
+    from .auth import (
+        PROVIDERS,
+        load_auth,
+        set_api_key,
+        set_default_provider,
+        _auth_path,
+    )
+
+    if set_default:
+        if set_default not in PROVIDERS:
+            display.error(
+                f"Unknown provider: '{set_default}'. Available: {', '.join(PROVIDERS)}"
+            )
+            raise typer.Exit(1)
+        set_default_provider(set_default)
+        display.success(f"Default provider set to {set_default}")
+        return
+
+    if show:
+        auth_data = load_auth()
+        keys = auth_data.get("keys", {})
+        default = auth_data.get("default", {}).get("provider", "openrouter")
+        if not keys:
+            display.info("No keys saved. Run 'rlm-ws auth' to configure.")
+            display.info(f"Config file: {_auth_path()}")
+            return
+        display.console.print()
+        for prov, key in keys.items():
+            masked = key[:8] + "..." + key[-4:] if len(key) > 16 else "***"
+            marker = " [green](default)[/green]" if prov == default else ""
+            display.console.print(f"  {prov}: {masked}{marker}")
+        display.console.print()
+        display.info(f"Config file: {_auth_path()}")
+        return
+
+    # Interactive setup.
+    display.header("rlm-ws auth", "Configure a model provider")
+
+    if provider is None:
+        display.console.print()
+        display.console.print("[bold]Choose a provider:[/bold]")
+        display.console.print()
+        prov_keys = list(PROVIDERS.keys())
+        for i, key in enumerate(prov_keys, 1):
+            info = PROVIDERS[key]
+            display.console.print(f"  [cyan]{i}[/cyan]  [bold]{info['name']}[/bold]")
+        display.console.print()
+        choice = Prompt.ask(
+            "Select",
+            choices=[str(i) for i in range(1, len(prov_keys) + 1)],
+            default="1",
+        )
+        provider = prov_keys[int(choice) - 1]
+
+    if provider not in PROVIDERS:
+        display.error(f"Unknown provider: '{provider}'")
+        raise typer.Exit(1)
+
+    info = PROVIDERS[provider]
+    display.console.print()
+    display.info(
+        f"Get an API key at: [link={info['signup_url']}]{info['signup_url']}[/link]"
+    )
+    display.console.print()
+
+    key = Prompt.ask(f"  {info['name']} API key")
+    if not key.strip():
+        display.warn("No key entered, skipping.")
+        return
+
+    path = set_api_key(provider, key.strip())
+    display.success(f"Key saved to {path}")
+    display.info(f"  Provider: {provider}")
+    display.info(f"  API base: {info['api_base']}")
+    display.info(f"  Default model: {info['models'][0]}")
+
+    # Offer to set as default.
+    auth_data = load_auth()
+    current_default = auth_data.get("default", {}).get("provider", "")
+    if current_default != provider:
+        if Confirm.ask(f"\n  Set {provider} as the default provider?", default=True):
+            set_default_provider(provider)
+            display.success(f"Default provider: {provider}")
+
+
+# ============================================================================
 # init
 # ============================================================================
 
@@ -52,10 +166,7 @@ def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
 def init(
     name: Optional[str] = typer.Argument(
         None,
-        help=(
-            "Course name. Creates a directory with this name. "
-            "Use '.' for current directory."
-        ),
+        help="Course name. Creates a directory with this name. Use '.' for cwd.",
     ),
     template: Optional[str] = typer.Option(
         None,
@@ -66,7 +177,7 @@ def init(
     templates_dir: Optional[Path] = typer.Option(
         None,
         "--templates-dir",
-        help="Additional directory to search for templates.",
+        help="Additional templates directory.",
         envvar="RLM_TEMPLATES_DIR",
     ),
     no_ingest: bool = typer.Option(
@@ -78,9 +189,8 @@ def init(
     """Initialize a new RLM workspace.
 
     \b
-    Walks you through configuring the learning relationship:
-    who the student is, who the tutor is, what the focus should be.
-    Answers are saved to workspace.toml and shape every session.
+    Walks you through configuring the learning relationship.
+    Answers shape the system prompt used in every tutoring session.
     """
     from .templates import (
         discover_templates,
@@ -142,10 +252,7 @@ def init(
         choices = [str(i) for i in range(1, empty_idx + 1)]
         choice = Prompt.ask("Select", choices=choices, default="1")
         idx = int(choice)
-        if idx <= len(keys):
-            template = keys[idx - 1]
-        else:
-            template = "empty"
+        template = keys[idx - 1] if idx <= len(keys) else "empty"
 
     if template != "empty" and template not in templates:
         available = ", ".join(templates.keys()) or "(none found)"
@@ -162,6 +269,25 @@ def init(
         selected_template = templates[template]
         answers = run_prompts(selected_template, course_name)
         system_prompt = build_system_prompt(selected_template, answers)
+
+    # --- Show the user what they configured ---
+
+    if system_prompt:
+        display.console.print()
+        display.console.print(
+            Panel(
+                system_prompt.strip(),
+                title="[bold cyan]Generated System Prompt[/bold cyan]",
+                border_style="cyan",
+                padding=(1, 2),
+            )
+        )
+        display.console.print()
+
+        if not Confirm.ask("  Does this look right?", default=True):
+            display.info(
+                "You can edit workspace.toml after init to change the system prompt."
+            )
 
     # --- Create workspace ---
 
@@ -186,7 +312,6 @@ def init(
         for p in written:
             display.info(f"Created {p.relative_to(ws_dir)}")
 
-        # Ingest content/ if present.
         if not no_ingest:
             content_dir = ws_dir / "content"
             if content_dir.is_dir():
@@ -194,6 +319,12 @@ def init(
 
                 display.console.print()
                 ingest_directory(ws, content_dir, course_name=course_name)
+
+    # --- Check auth ---
+
+    from .auth import get_api_key
+
+    api_key, _, _ = get_api_key()
 
     # --- Summary ---
 
@@ -204,14 +335,21 @@ def init(
         display.console.print()
         display.success("Workspace is ready!")
         display.info(f"  cd {ws_dir.name}")
+        if not api_key:
+            display.info("  rlm-ws auth                      — configure an API key")
         display.info("  rlm-ws session                   — start tutoring")
         display.info("  rlm-ws inspect --tree             — view course structure")
     else:
         display.info("Workspace initialized (empty).")
         display.info(f"  cd {ws_dir.name}")
         display.info("  # Add .md files to content/, then:")
-        display.info("  rlm-ws ingest content/            — parse course materials")
+        display.info("  rlm-ws ingest content/")
+        if not api_key:
+            display.info("  rlm-ws auth                      — configure an API key")
         display.info("  rlm-ws session                    — start tutoring")
+
+    display.console.print()
+    display.info("Edit workspace.toml to change the system prompt or identities.")
 
 
 # ============================================================================
@@ -221,21 +359,9 @@ def init(
 
 @app.command()
 def ingest(
-    paths: list[Path] = typer.Argument(
-        ...,
-        help="Markdown files or directories to ingest.",
-    ),
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace",
-        "-w",
-    ),
-    name: Optional[str] = typer.Option(
-        None,
-        "--name",
-        "-n",
-        help="Course name override.",
-    ),
+    paths: list[Path] = typer.Argument(..., help="Markdown files or directories."),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    name: Optional[str] = typer.Option(None, "--name", "-n"),
 ):
     """Ingest markdown course materials into the workspace."""
     ws, ws_dir = _resolve_workspace(workspace)
@@ -263,15 +389,14 @@ def ingest(
 def session(
     workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
     student: str = typer.Option("default", "--student", "-s"),
-    model: str = typer.Option(
-        "anthropic/claude-sonnet-4-20250514",
-        "--model",
-        "-m",
-    ),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
     api_key: Optional[str] = typer.Option(None, "--api-key", "-k"),
-    api_base: str = typer.Option(
-        "https://openrouter.ai/api/v1",
-        "--api-base",
+    api_base: Optional[str] = typer.Option(None, "--api-base"),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="Provider from auth config: openrouter, openai, anthropic",
     ),
 ):
     """Start an interactive tutoring session.
@@ -289,15 +414,24 @@ def session(
         display.error("No course ingested. Run 'rlm-ws ingest' first.")
         raise typer.Exit(1)
 
+    # Resolve auth.
+    from .auth import get_api_key
     from .session import SessionConfig, run_interactive
+
+    resolved_key, resolved_base, resolved_model = get_api_key(provider)
 
     config = SessionConfig(
         student_id=student,
-        model=model,
-        api_key=api_key or "",
-        api_base=api_base,
+        model=model or resolved_model,
+        api_key=api_key or resolved_key,
+        api_base=api_base or resolved_base,
         ws_dir=ws_dir,
     )
+
+    if not config.api_key:
+        display.warn("No API key configured. Running in offline mode.")
+        display.info("Run 'rlm-ws auth' to configure a provider.")
+        display.console.print()
 
     display.header("rlm-ws", f"Tutoring session • student: {student}")
     run_interactive(ws, config)
@@ -325,21 +459,18 @@ def inspect(
     if counts:
         atoms, frames, events = ws.object_counts()
         display.object_counts_display(atoms, frames, events)
-
     if refs:
         all_refs = ws.list_refs("")
         if all_refs:
             display.ref_table(all_refs)
         else:
             display.info("No refs set")
-
     if tree:
         course_hash = ws.get_ref_hash("course/structure")
         if course_hash:
             display.course_tree(ws, course_hash)
         else:
             display.info("No course structure found")
-
     if mastery:
         mastery_hash = ws.get_ref_hash(f"student/{mastery}/mastery")
         if mastery_hash:

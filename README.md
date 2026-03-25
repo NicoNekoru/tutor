@@ -28,31 +28,23 @@ pytest -v                    # 37 Python tests
 ### CLI quickstart
 
 ```bash
-# Initialize a workspace (guided — pick a template)
+# Initialize a workspace (guided — pick a template, answer identity prompts)
 rlm-ws init my-course
 
-# Or non-interactively with a specific template
-rlm-ws init my-course --template algorithms
-
-# Use a custom template from your own directory
-rlm-ws init my-course --template calculus --templates-dir ~/my-templates
-
-# Ingest additional content
-rlm-ws ingest content/extra-topics.md
-
-# Inspect the workspace
-rlm-ws inspect
-rlm-ws inspect --mastery alice
+# Configure an API key (stored in ~/.config/rlm-ws/auth.toml)
+rlm-ws auth
 
 # Start a tutoring session
-export OPENROUTER_API_KEY="sk-..."
 rlm-ws session --student alice
 
 # In-session commands: /mastery, /tree, /status, /quit
 
-# Maintenance
-rlm-ws gc
-rlm-ws export course/structure -o course.json
+# Other commands
+rlm-ws ingest content/extra-topics.md   # add more course materials
+rlm-ws inspect --tree                   # view course structure
+rlm-ws auth --show                      # show saved API keys
+rlm-ws gc                               # garbage collection
+rlm-ws export course/structure -o out.json
 ```
 
 ### Course markdown format
@@ -260,6 +252,7 @@ python/rlm_ws/                  ← Python porcelain layer
 ├── ingest.py                   ← markdown course parser → workspace objects
 ├── session.py                  ← interactive tutoring session (RLM execution loop)
 ├── display.py                  ← rich terminal formatting helpers
+├── auth.py                     ← API key management (~/.config/rlm-ws/auth.toml)
 ├── templates.py                ← template discovery and application logic
 ├── _template_data/             ← built-in template directories
 │   ├── starter/                ← minimal skeleton (template.json + content/)

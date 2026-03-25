@@ -51,6 +51,7 @@ class SessionConfig:
     api_key: str = ""
     max_context_results: int = 10
     system_prompt: str = ""
+    ws_dir: Path | None = None  # set by CLI; used to load workspace.toml
 
     def __post_init__(self):
         if not self.api_key:
@@ -86,11 +87,10 @@ class SessionState:
 def start_session(ws: Workspace, config: SessionConfig) -> SessionState:
     """Start a new tutoring session."""
     # Load system prompt from workspace.toml if not explicitly provided.
-    if not config.system_prompt:
+    if not config.system_prompt and config.ws_dir:
         from .templates import load_workspace_config
 
-        ws_dir = Path(ws.root_path)
-        ws_config = load_workspace_config(ws_dir)
+        ws_config = load_workspace_config(config.ws_dir)
         saved_prompt = ws_config.get("system_prompt", {}).get("content", "")
         if saved_prompt.strip():
             config.system_prompt = saved_prompt
@@ -420,7 +420,7 @@ def _call_model(state: SessionState, system: str) -> str:
     """Call the model API and return the response text."""
     if not state.config.api_key:
         return (
-            "_No API key configured. Set OPENROUTER_API_KEY or pass --api-key. "
+            "_No API key configured. Run `rlm-ws auth` to set one up. "
             "Running in offline mode — I'll echo your input back._\n\n"
             f"> {state.messages[-1]['content']}"
         )
