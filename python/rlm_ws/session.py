@@ -383,11 +383,17 @@ def _retrieve_context(
     # Retrieved content.
     content_parts = []
     for candidate in results[: state.config.max_context_results]:
-        atom = state.ws.get_atom(candidate.hash)
+        try:
+            atom = state.ws.get_atom(candidate.hash)
+        except TypeError:
+            atom = None
         if atom:
             content_parts.append(f"[{atom.kind}] {atom.text}")
         else:
-            frame = state.ws.get_frame(candidate.hash)
+            try:
+                frame = state.ws.get_frame(candidate.hash)
+            except TypeError:
+                frame = None
             if frame and frame.label:
                 content_parts.append(f"[{frame.kind}: {frame.label}]")
 

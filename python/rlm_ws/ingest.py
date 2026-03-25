@@ -203,20 +203,20 @@ def _build_course(
     modules: list[ParsedModule],
 ) -> Hash:
     """Build workspace objects from parsed course structure."""
-    # Track lesson names → hashes for prerequisite resolution.
     lesson_hashes: dict[str, Hash] = {}
-    module_hashes: list[Hash] = []
 
     total_atoms = 0
     total_lessons = 0
 
-    for module in modules:
-        lesson_frame_hashes: list[Hash] = []
+    # Pass 1: build all lesson frames WITHOUT prerequisites.
+    # This populates lesson_hashes so prerequisites can be resolved by name.
+    module_lesson_names: list[list[str]] = []  # parallel to modules
 
+    for module in modules:
+        lesson_names: list[str] = []
         for lesson in module.lessons:
             edges: list[Edge] = []
 
-            # Lesson body atom.
             if lesson.body:
                 body_hash = ws.put_atom(
                     Atom(
@@ -228,7 +228,6 @@ def _build_course(
                 edges.append(Edge("Contains", body_hash))
                 total_atoms += 1
 
-            # Content atoms.
             for atom in lesson.atoms:
                 atom_hash = ws.put_atom(
                     Atom(
@@ -246,7 +245,6 @@ def _build_course(
                 }.get(atom.kind, "Contains")
                 edges.append(Edge(label, atom_hash))
 
-            # Build the lesson frame (prerequisites resolved in a second pass).
             lesson_hash = ws.put_frame(
                 Frame(
                     "Lesson",
@@ -256,21 +254,13 @@ def _build_course(
                 )
             )
             lesson_hashes[lesson.name] = lesson_hash
-            lesson_frame_hashes.append(lesson_hash)
+            lesson_names.append(lesson.name)
             total_lessons += 1
 
-        # Module frame.
-        module_edges = [Edge("Contains", lh) for lh in lesson_frame_hashes]
-        module_hash = ws.put_frame(
-            Frame(
-                "Module",
-                module_edges,
-                label=module.name,
-            )
-        )
-        module_hashes.append(module_hash)
+        module_lesson_names.append(lesson_names)
 
-    # Second pass: resolve prerequisites by rebuilding lesson frames.
+    # Pass 2: rebuild lessons that have prerequisites (now that all names
+    # are in the dict). This produces new hashes for those lessons.
     for module in modules:
         for lesson in module.lessons:
             if not lesson.prerequisites:
@@ -288,7 +278,8 @@ def _build_course(
                     new_edges.append(Edge("Prerequisite", prereq_hash))
                 else:
                     display.warn(
-                        f"Prerequisite '{prereq_name}' not found for lesson '{lesson.name}'"
+                        f"Prerequisite '{prereq_name}' not found "
+                        f"for lesson '{lesson.name}'"
                     )
 
             if len(new_edges) > len(old_frame.edges):
@@ -302,7 +293,19 @@ def _build_course(
                 )
                 lesson_hashes[lesson.name] = new_hash
 
-    # Course frame.
+    # Pass 3: build module and course frames using the final lesson hashes.
+    module_hashes: list[Hash] = []
+    for module, lesson_names in zip(modules, module_lesson_names):
+        module_edges = [Edge("Contains", lesson_hashes[name]) for name in lesson_names]
+        module_hash = ws.put_frame(
+            Frame(
+                "Module",
+                module_edges,
+                label=module.name,
+            )
+        )
+        module_hashes.append(module_hash)
+
     course_edges = [Edge("Contains", mh) for mh in module_hashes]
     course_hash = ws.put_frame(
         Frame(
