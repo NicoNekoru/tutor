@@ -165,7 +165,7 @@ The durable workspace remains the source of truth. API-side conversation state, 
 
 For future orchestration work, prefer typed tool/function calls or strict JSON command outputs. Use the Agents SDK when the application wants an SDK-owned agent loop with tools, approvals, handoffs, streaming, and traces. Use Skills as packaged model/tool instructions at the edge; they are not core object-store primitives.
 
-The session loop currently persists retrieval provenance, first-class `CallContext` frames, typed `mastery_update` commands, and bounded `subcall` child `ModelCall` events. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
+The session loop currently persists retrieval provenance, first-class `CallContext` frames, typed `mastery_update` commands, bounded `subcall` child `ModelCall` events, and parent continuations that compose child outputs into the visible answer. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
 

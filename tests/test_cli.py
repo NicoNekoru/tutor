@@ -454,7 +454,25 @@ def test_session_subcall_command_records_child_call():
                     "}\n"
                     "```"
                 )
-            return "Child explanation of the invariant."
+            if len(calls) == 2:
+                return "Child explanation of the invariant."
+            return (
+                "```json\n"
+                "{\n"
+                '  "visible_text": "Final answer composed from the child invariant explanation.",\n'
+                '  "commands": [\n'
+                "    {\n"
+                '      "kind": "mastery_update",\n'
+                '      "arguments": {\n'
+                f'        "concept": "{binary_hash.to_hex()}",\n'
+                '        "level": 0.6,\n'
+                '        "reason": "student followed the recursive invariant check"\n'
+                "      }\n"
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```"
+            )
 
         try:
             session_mod._call_model = fake_call_model
@@ -462,28 +480,46 @@ def test_session_subcall_command_records_child_call():
         finally:
             session_mod._call_model = old_call_model
 
-        assert response == "Let me check the invariant separately."
-        assert len(calls) == 2
+        assert response == "Final answer composed from the child invariant explanation."
+        assert len(calls) == 3
         assert calls[1][0]["content"] == "Explain the binary search invariant."
+        assert "Child explanation of the invariant." in calls[2][-1]["content"]
 
         model_calls = [
             (h, ws.get_event(h)) for h in ws.events_by_kind("ModelCall")
         ]
         root_hash, root_call = next(
-            (h, e) for h, e in model_calls if e.trace.call_depth == 0
+            (h, e)
+            for h, e in model_calls
+            if e.trace.call_depth == 0
+            and any(ref.role == "child_call" for ref in e.outputs)
         )
         child_hash, child_call = next(
             (h, e) for h, e in model_calls if e.trace.call_depth == 1
         )
+        continuation_hash, continuation_call = next(
+            (h, e)
+            for h, e in model_calls
+            if e.trace.call_depth == 0 and root_hash in e.parents
+        )
 
         assert root_hash != child_hash
+        assert continuation_hash != root_hash
         assert child_call.trace.model == "gpt-5.4-nano"
         assert any(
             ref.role == "child_call" and ref.hash == child_hash
             for ref in root_call.outputs
         )
+        assert any(ref.role == "parent_draft" for ref in continuation_call.inputs)
+        assert any(ref.role == "child_output" for ref in continuation_call.inputs)
         assert len(ws.events_by_kind("RetrievalPerformed")) == 2
         assert len(ws.frames_by_kind("CallContext")) == 2
+
+        update_events = ws.events_by_kind("StudentModelUpdate")
+        assert len(update_events) == 1
+        assert state.last_event == update_events[0]
+        mastery = dict(ws.student_mastery_map(state.student_model))
+        assert abs(mastery[binary_hash] - 0.6) < 1e-9
 
         child_input_roles = {ref.role for ref in child_call.inputs}
         assert "call_context" in child_input_roles

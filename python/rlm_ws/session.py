@@ -121,6 +121,15 @@ class SubcallResult:
     visible_text: str
 
 
+@dataclass(frozen=True)
+class ContinuationResult:
+    """A parent continuation after child calls complete."""
+
+    event_hash: Hash
+    output_hash: Hash
+    parsed: ParsedModelOutput
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
@@ -305,8 +314,6 @@ def run_turn(state: SessionState, user_input: str) -> str:
     parsed = _parse_model_output(raw_response)
     response_text = parsed.visible_text
 
-    state.messages.append({"role": "assistant", "content": response_text})
-
     # 6. Execute bounded child calls requested by the model.
     child_results = _execute_subcalls(
         state,
@@ -357,14 +364,33 @@ def run_turn(state: SessionState, user_input: str) -> str:
         )
     )
 
+    continuation = None
+    if child_results:
+        continuation = _continue_parent_call(
+            state,
+            system,
+            parsed,
+            child_results,
+            parent_call_event=call_event,
+            parent_output=output_atom,
+            context_frame=context_frame,
+        )
+        response_text = continuation.parsed.visible_text
+
     # 8. Apply supported state mutations requested through typed commands.
+    commands_to_apply = list(parsed.commands)
+    if continuation:
+        commands_to_apply.extend(continuation.parsed.commands)
     mutation_events = _apply_engine_commands(
         state,
-        parsed.commands,
-        parent_event=call_event,
-        model_output=output_atom,
+        commands_to_apply,
+        parent_event=continuation.event_hash if continuation else call_event,
+        model_output=continuation.output_hash if continuation else output_atom,
     )
-    state.last_event = mutation_events[-1] if mutation_events else call_event
+    terminal_event = continuation.event_hash if continuation else call_event
+    state.last_event = mutation_events[-1] if mutation_events else terminal_event
+
+    state.messages.append({"role": "assistant", "content": response_text})
 
     return response_text
 
@@ -1014,6 +1040,113 @@ def _subcall_model(state: SessionState, command: EngineCommand, depth: int) -> s
     if depth > 0 and state.config.model == "gpt-5.4-mini":
         return "gpt-5.4-nano"
     return state.config.model
+
+
+def _continue_parent_call(
+    state: SessionState,
+    system: str,
+    parent_parsed: ParsedModelOutput,
+    child_results: list[SubcallResult],
+    parent_call_event: Hash,
+    parent_output: Hash,
+    context_frame: Hash,
+) -> ContinuationResult:
+    """Feed child outputs back into the parent and record the final answer call."""
+    continuation_prompt = _child_results_prompt(parent_parsed.visible_text, child_results)
+    continuation_messages = [
+        *state.messages,
+        {"role": "assistant", "content": parent_parsed.visible_text},
+        {"role": "user", "content": continuation_prompt},
+    ]
+    continuation_state = SessionState(
+        ws=state.ws,
+        config=state.config,
+        session_event=state.session_event,
+        last_event=parent_call_event,
+        student_model=state.student_model,
+        messages=continuation_messages,
+        turn_count=state.turn_count,
+    )
+
+    t0 = time.monotonic()
+    raw_response = _call_model(continuation_state, system)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    parsed = _parse_model_output(raw_response)
+
+    output_structured = None
+    if parsed.commands or parsed.raw_text != parsed.visible_text:
+        output_structured = {
+            "commands": [_command_to_dict(c) for c in parsed.commands],
+            "raw_text": parsed.raw_text,
+            "parent_call": parent_call_event.to_hex(),
+            "child_calls": [
+                {
+                    "event": c.event_hash.to_hex(),
+                    "output": c.output_hash.to_hex(),
+                }
+                for c in child_results
+            ],
+        }
+
+    output_atom = state.ws.put_atom(
+        Atom(
+            "ModelOutput",
+            parsed.visible_text,
+            tags=["model-output", "continuation-output"],
+            structured=output_structured,
+        )
+    )
+
+    call_event = state.ws.put_event(
+        Event(
+            "ModelCall",
+            parents=[parent_call_event],
+            inputs=[
+                EventRef(context_frame, "call_context"),
+                EventRef(parent_output, "parent_draft"),
+            ]
+            + [EventRef(c.output_hash, "child_output") for c in child_results],
+            outputs=[EventRef(output_atom, "model_output")],
+            trace=CallTrace(
+                call_depth=0,
+                model=state.config.model,
+                latency_ms=latency_ms,
+                parent_call=parent_call_event,
+            ),
+        )
+    )
+
+    return ContinuationResult(
+        event_hash=call_event,
+        output_hash=output_atom,
+        parsed=parsed,
+    )
+
+
+def _child_results_prompt(
+    parent_text: str,
+    child_results: list[SubcallResult],
+) -> str:
+    child_sections = []
+    for idx, result in enumerate(child_results, 1):
+        child_sections.append(
+            "\n".join(
+                [
+                    f"Child call {idx}:",
+                    f"event={result.event_hash.to_hex()}",
+                    f"output={result.output_hash.to_hex()}",
+                    result.visible_text,
+                ]
+            )
+        )
+    return (
+        "Use the completed child call outputs to compose the final response for "
+        "the student. Do not mention internal call mechanics unless it is "
+        "pedagogically useful.\n\n"
+        f"Parent draft:\n{parent_text}\n\n"
+        "Child outputs:\n"
+        + "\n\n".join(child_sections)
+    )
 
 
 def _apply_engine_commands(
