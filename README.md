@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 43 Python tests
+pytest -v                    # 44 Python tests
 ```
 
 ### CLI quickstart
@@ -37,7 +37,7 @@ rlm-ws auth
 # Start a tutoring session
 rlm-ws session --student alice
 
-# In-session commands: /mastery, /tree, /status, /quit
+# In-session commands: /mastery, /model, /tree, /status, /quit
 
 # Other commands
 rlm-ws ingest content/extra-topics.md   # add more course materials
@@ -236,7 +236,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 43 tests across 3 test files
+pytest -v                    # 44 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -275,7 +275,7 @@ tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (16 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (15 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (16 tests)
 ```
 
 ### Lint policy

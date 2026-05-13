@@ -466,6 +466,7 @@ def session_trace_rows(
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "show available commands"),
     ("/mastery", "show current mastery levels"),
+    ("/model", "show or change the current model"),
     ("/tree", "show course structure"),
     ("/status", "session and workspace stats"),
     ("/quit", "end the session (or press ^D)"),
@@ -490,7 +491,7 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
     display.welcome_banner(
         course=course_name,
         student=config.student_id,
-        model=config.model,
+        model=f"{config.provider} / {config.model}",
         extra_lines=("/help for commands  ·  ^D or /quit to exit",),
     )
 
@@ -523,6 +524,10 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.warn("No student model loaded")
                 continue
 
+            if cmd == "/model" or cmd.startswith("/model "):
+                _handle_model_command(state, stripped)
+                continue
+
             if cmd == "/tree":
                 course_hash = ws.get_ref_hash("course/structure")
                 if course_hash:
@@ -536,7 +541,8 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                 display.object_counts_display(atoms, frames, events)
                 display.info(f"turn      {state.turn_count}")
                 display.info(f"student   {config.student_id}")
-                display.info(f"prof      {config.model}")
+                display.info(f"provider  {config.provider}")
+                display.info(f"model     {config.model}")
                 continue
 
             if cmd.startswith("/"):
@@ -553,6 +559,77 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
 
     finally:
         end_session(state)
+
+
+def _handle_model_command(state: SessionState, raw_command: str) -> None:
+    models = _provider_models(state.config.provider)
+    argument = _slash_argument(raw_command)
+    if argument is not None:
+        selected = _resolve_model_selection(argument, models)
+        if selected is None:
+            display.warn(f"Unknown model choice: {argument}")
+            return
+        _set_session_model(state, selected)
+        return
+
+    display.model_choices(state.config.provider, state.config.model, models)
+    try:
+        selected = _resolve_model_selection(
+            display.text_prompt("model", default=state.config.model),
+            models,
+        )
+    except (EOFError, KeyboardInterrupt):
+        display.console.print()
+        display.info("model unchanged")
+        return
+    if selected is None:
+        display.info("model unchanged")
+        return
+    _set_session_model(state, selected)
+
+
+def _slash_argument(raw_command: str) -> str | None:
+    parts = raw_command.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    value = parts[1].strip()
+    return value or None
+
+
+def _provider_models(provider: str) -> list[str]:
+    from .auth import PROVIDERS
+
+    raw_models = PROVIDERS.get(provider, {}).get("models", [])
+    return [model for model in raw_models if isinstance(model, str)]
+
+
+def _resolve_model_selection(
+    value: str,
+    models: list[str],
+) -> str | None:
+    model = value.strip()
+    if not model:
+        return None
+    if model.isdecimal():
+        index = int(model) - 1
+        if 0 <= index < len(models):
+            return models[index]
+        return None
+    return model
+
+
+def _set_session_model(state: SessionState, model: str) -> None:
+    selected = model.strip()
+    if not selected:
+        display.warn("Model cannot be empty")
+        return
+    previous = state.config.model
+    if selected == previous:
+        display.info("model unchanged")
+        return
+    state.config.model = selected
+    display.success(f"Model set to {selected}")
+    display.hint(f"was {previous}; applies to subsequent model calls")
 
 
 # ============================================================================
@@ -1138,8 +1215,12 @@ def _subcall_model(state: SessionState, command: EngineCommand, depth: int) -> s
     model = command.arguments.get("model")
     if isinstance(model, str) and model.strip():
         return model.strip()
-    if depth > 0 and state.config.model == "gpt-5.4-mini":
-        return "gpt-5.4-nano"
+    child_defaults = {
+        "gpt-5.4-mini": "gpt-5.4-nano",
+        "openai/gpt-5.4-mini": "openai/gpt-5.4-nano",
+    }
+    if depth > 0 and state.config.model in child_defaults:
+        return child_defaults[state.config.model]
     return state.config.model
 
 
@@ -1427,4 +1508,3 @@ def _extract_responses_text(data: dict) -> str:
                 if isinstance(text, str):
                     chunks.append(text)
     return "".join(chunks)
-

@@ -143,6 +143,25 @@ def slash_help(commands: Sequence[tuple[str, str]]) -> None:
     _blank()
 
 
+def model_choices(provider: str, current: str, models: Sequence[str]) -> None:
+    table = _bare_table("models")
+    table.add_column("#", justify="right", style=C.dim)
+    table.add_column("model")
+    for index, model in enumerate(models, start=1):
+        label = model
+        if model == current:
+            label = f"[bold {C.accent}]{model}[/] [{C.dim}]current[/]"
+        table.add_row(str(index), label)
+
+    _blank()
+    _print(f"[{C.dim}]provider[/]  {provider}")
+    _print(f"[{C.dim}]current [/][{C.accent}]{current}[/]")
+    if models:
+        console.print(Padding(table, (0, 0, 0, MARGIN)))
+    _print(f"[{C.dim}]Enter a number from the list or any model ID.[/]")
+    _blank()
+
+
 # Prompt: slash-command completion + readline editing.
 
 class _SlashCompleter(Completer):
@@ -228,6 +247,15 @@ def student_input_prompt(
     cmds: tuple[tuple[str, str], ...] = tuple(commands)
     session = _get_prompt_session(cmds)
     return session.prompt(_chevron_prompt()).rstrip()
+
+
+def text_prompt(label: str, *, default: str = "") -> str:
+    session: PromptSession[str] = PromptSession(style=_PROMPT_STYLE)
+    prompt = FormattedText([
+        ("class:prompt-margin", INDENT),
+        ("class:prompt-chevron", f"{label}  "),
+    ])
+    return session.prompt(prompt, default=default).strip()
 
 
 def student_says(text: str) -> None:

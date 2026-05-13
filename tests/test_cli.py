@@ -711,6 +711,47 @@ def test_provider_adapters_shape_http_requests():
     print("  PASS: test_provider_adapters_shape_http_requests")
 
 
+def test_session_model_command_helpers():
+    from rlm_ws.session import (
+        EngineCommand,
+        SessionState,
+        _provider_models,
+        _resolve_model_selection,
+        _set_session_model,
+        _subcall_model,
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        state = SessionState(
+            ws=rlm_ws.Workspace.init(d),
+            config=SessionConfig(
+                provider="openrouter",
+                model="openai/gpt-5.4-mini",
+            ),
+        )
+        models = _provider_models("openrouter")
+
+        assert _resolve_model_selection("2", models) == "openai/gpt-5.4-nano"
+        assert _resolve_model_selection("99", models) is None
+        assert (
+            _resolve_model_selection("anthropic/claude-sonnet-4", models)
+            == "anthropic/claude-sonnet-4"
+        )
+        assert (
+            _subcall_model(state, EngineCommand("subcall", {}), 1)
+            == "openai/gpt-5.4-nano"
+        )
+
+        _set_session_model(state, "anthropic/claude-sonnet-4")
+        assert state.config.model == "anthropic/claude-sonnet-4"
+        assert (
+            _subcall_model(state, EngineCommand("subcall", {}), 1)
+            == "anthropic/claude-sonnet-4"
+        )
+
+    print("  PASS: test_session_model_command_helpers")
+
+
 if __name__ == "__main__":
     print("Running CLI and session tests...")
     test_discover_bundled_templates()
@@ -728,4 +769,5 @@ if __name__ == "__main__":
     test_session_subcall_command_records_child_call()
     test_responses_text_extraction()
     test_provider_adapters_shape_http_requests()
-    print("\nAll 15 tests passed!")
+    test_session_model_command_helpers()
+    print("\nAll 16 tests passed!")

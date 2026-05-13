@@ -406,6 +406,7 @@ def session(
     \b
     In-session commands:
       /mastery  — show current mastery levels
+      /model    — show or change the current model
       /tree     — show course structure
       /status   — show workspace statistics
       /quit     — end session
