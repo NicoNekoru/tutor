@@ -1,6 +1,6 @@
 """Terminal presentation for the rlm-ws tutor.
 
-Layout sketch:
+Layout:
 
     rlm-ws  intro to calculus
     user · gpt-5.4-mini
@@ -9,26 +9,29 @@ Layout sketch:
       ›  how does the chain rule work?
 
          If y = f(g(x)), then dy/dx = f'(g(x)) · g'(x).
-         Concretely: differentiate the outer function at the
-         inner one, then multiply by the inner derivative.
 
       ›  /mastery
 
 Every line sits at a two-column left margin. The chevron marks
 student turns; the Prof's reply is unlabeled indented prose.
+Slash-command completion is shown as the student types ``/``.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Iterable, Iterator
+from typing import Any, Generator, Iterable, Iterator, Sequence
 
-from rich.console import Console
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import CompleteEvent, Completer, Completion
+from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.styles import Style
+from rich.console import Console, RenderableType
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.rule import Rule
 from rich.table import Table
-from rich.text import Text
 from rich.tree import Tree
 
 
@@ -55,8 +58,8 @@ DOT = "·"
 ARROW = "→"
 
 
-console = Console(highlight=False, soft_wrap=False)
-err_console = Console(stderr=True, highlight=False)
+console: Console = Console(highlight=False, soft_wrap=False)
+err_console: Console = Console(stderr=True, highlight=False)
 
 
 def _print(markup: str) -> None:
@@ -76,7 +79,7 @@ def section(title: str) -> None:
     console.print(Rule(f"[{C.dim}]{title}[/]", style=C.dim, align="left"))
 
 
-# Status messages.
+# Status.
 
 def success(msg: str) -> None:
     _print(f"[bold {C.ok}]{TICK}[/]  {msg}")
@@ -129,7 +132,7 @@ def welcome_banner(
     divider()
 
 
-def slash_help(commands: list[tuple[str, str]]) -> None:
+def slash_help(commands: Sequence[tuple[str, str]]) -> None:
     table = Table.grid(padding=(0, 3))
     table.add_column(style=f"bold {C.accent}", no_wrap=True)
     table.add_column(style=C.muted)
@@ -140,13 +143,91 @@ def slash_help(commands: list[tuple[str, str]]) -> None:
     _blank()
 
 
-# Conversation.
+# Prompt: slash-command completion + readline editing.
 
-def student_input_prompt(*, hint_text: str = "") -> str:
+class _SlashCompleter(Completer):
+    """Show a popup with matching slash commands as the user types."""
+
+    def __init__(self, commands: Sequence[tuple[str, str]]) -> None:
+        self._commands: list[tuple[str, str]] = list(commands)
+
+    def get_completions(
+        self,
+        document: Document,
+        complete_event: CompleteEvent,
+    ) -> Iterator[Completion]:
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+        space = text.find(" ")
+        if space != -1 and document.cursor_position > space:
+            return
+        word = text if space == -1 else text[:space]
+        for cmd, desc in self._commands:
+            if cmd.startswith(word):
+                yield Completion(
+                    cmd,
+                    start_position=-len(word),
+                    display=cmd,
+                    display_meta=desc,
+                )
+
+
+_PROMPT_STYLE: Style = Style.from_dict({
+    "prompt-margin": "",
+    "prompt-chevron": "bold ansigreen",
+    "completion-menu": "bg:#1c1c1c",
+    "completion-menu.completion": "bg:#1c1c1c #c8c8c8",
+    "completion-menu.completion.current": "bg:#3a3a3a #ffffff bold",
+    "completion-menu.meta.completion": "bg:#1c1c1c fg:#7a7a7a",
+    "completion-menu.meta.completion.current": "bg:#3a3a3a fg:#cccccc",
+    "scrollbar.background": "bg:#141414",
+    "scrollbar.button": "bg:#3a3a3a",
+})
+
+
+_prompt_session: PromptSession[str] | None = None
+_prompt_sig: tuple[tuple[str, str], ...] | None = None
+
+
+def _get_prompt_session(
+    commands: tuple[tuple[str, str], ...],
+) -> PromptSession[str]:
+    global _prompt_session, _prompt_sig
+    if _prompt_session is None or _prompt_sig != commands:
+        _prompt_sig = commands
+        _prompt_session = PromptSession(
+            completer=_SlashCompleter(commands),
+            complete_while_typing=True,
+            style=_PROMPT_STYLE,
+            mouse_support=False,
+        )
+    return _prompt_session
+
+
+def _chevron_prompt() -> FormattedText:
+    return FormattedText([
+        ("class:prompt-margin", INDENT),
+        ("class:prompt-chevron", f"{CHEVRON}  "),
+    ])
+
+
+def student_input_prompt(
+    *,
+    commands: Iterable[tuple[str, str]] = (),
+    hint_text: str = "",
+) -> str:
+    """Read a line of student input.
+
+    Uses prompt_toolkit for arrow-key navigation, word-wise delete
+    (ctrl/option-backspace), and a Codex/Claude-style slash-command
+    popup that appears as the student types ``/``.
+    """
     if hint_text:
         _print(f"[{C.dim}]{hint_text}[/]")
-    raw = console.input(f"{INDENT}[bold {C.student}]{CHEVRON}[/]  ")
-    return raw.rstrip()
+    cmds: tuple[tuple[str, str], ...] = tuple(commands)
+    session = _get_prompt_session(cmds)
+    return session.prompt(_chevron_prompt()).rstrip()
 
 
 def student_says(text: str) -> None:
@@ -163,7 +244,7 @@ model_response = prof_says
 
 
 @contextmanager
-def thinking(label: str = "thinking") -> Iterator[None]:
+def thinking(label: str = "thinking") -> Generator[None, None, None]:
     with console.status(
         f"[{C.dim}]{label}…[/]",
         spinner="dots",
@@ -174,7 +255,7 @@ def thinking(label: str = "thinking") -> Iterator[None]:
 
 # Hash.
 
-def hash_display(h) -> str:
+def hash_display(h: Any) -> str:
     return f"[{C.accent}]{h.short()}[/]"
 
 
@@ -192,13 +273,13 @@ def _bare_table(title: str | None = None) -> Table:
     )
 
 
-def _print_block(renderable) -> None:
+def _print_block(renderable: RenderableType) -> None:
     _blank()
     console.print(Padding(renderable, (0, 0, 0, MARGIN)))
     _blank()
 
 
-def ref_table(refs: list[tuple[str, object]]) -> None:
+def ref_table(refs: Sequence[tuple[str, Any]]) -> None:
     table = _bare_table("refs")
     table.add_column("name", style=C.student)
     table.add_column("target", style=C.accent)
@@ -207,7 +288,7 @@ def ref_table(refs: list[tuple[str, object]]) -> None:
     _print_block(table)
 
 
-def session_ref_table(refs: list[tuple[str, object]]) -> None:
+def session_ref_table(refs: Sequence[tuple[str, Any]]) -> None:
     table = _bare_table("sessions")
     table.add_column("ref", style=C.student)
     table.add_column("tip", style=C.accent)
@@ -216,7 +297,7 @@ def session_ref_table(refs: list[tuple[str, object]]) -> None:
     _print_block(table)
 
 
-def session_trace_display(ref_name: str, rows: list[object]) -> None:
+def session_trace_display(ref_name: str, rows: Sequence[Any]) -> None:
     table = _bare_table(f"trace {DOT} {ref_name}")
     table.add_column("#", justify="right", style=C.dim)
     table.add_column("event")
@@ -255,7 +336,7 @@ def object_counts_display(atoms: int, frames: int, events: int) -> None:
 
 # Course tree.
 
-_ATOM_STYLE = {
+_ATOM_STYLE: dict[str, str] = {
     "ConceptDefinition": C.accent,
     "ProblemStatement": "yellow",
     "WorkedExample": "green",
@@ -264,7 +345,7 @@ _ATOM_STYLE = {
     "ModelOutput": C.accent,
 }
 
-_EDGE_STYLE = {
+_EDGE_STYLE: dict[str, str] = {
     "CoversConcept": C.accent,
     "Contains": "bold",
     "IncludesProblem": "yellow",
@@ -274,19 +355,41 @@ _EDGE_STYLE = {
 }
 
 
-def course_tree(ws, course_hash) -> None:
+def _safe_get_frame(ws: Any, h: Any) -> Any:
+    """Return the frame at ``h``, or ``None`` if it's missing or an atom."""
+    try:
+        return ws.get_frame(h)
+    except TypeError:
+        return None
+
+
+def _safe_get_atom(ws: Any, h: Any) -> Any:
+    """Return the atom at ``h``, or ``None`` if it's missing or a frame."""
+    try:
+        return ws.get_atom(h)
+    except TypeError:
+        return None
+
+
+def course_tree(ws: Any, course_hash: Any) -> None:
     tree = Tree(f"[bold {C.accent}]course[/]", guide_style=C.dim)
     _build_tree(ws, course_hash, tree, depth=0, max_depth=4)
     _print_block(tree)
 
 
-def _build_tree(ws, hash, tree_node, depth: int, max_depth: int) -> None:
+def _build_tree(
+    ws: Any,
+    node_hash: Any,
+    tree_node: Tree,
+    depth: int,
+    max_depth: int,
+) -> None:
     if depth >= max_depth:
         return
 
-    frame = ws.get_frame(hash)
+    frame = _safe_get_frame(ws, node_hash)
     if frame is None:
-        atom = ws.get_atom(hash)
+        atom = _safe_get_atom(ws, node_hash)
         if atom is None:
             return
         style = _ATOM_STYLE.get(atom.kind, C.dim)
@@ -297,13 +400,13 @@ def _build_tree(ws, hash, tree_node, depth: int, max_depth: int) -> None:
     for edge in frame.edges:
         label_style = _EDGE_STYLE.get(edge.label, C.dim)
 
-        child_frame = ws.get_frame(edge.target)
-        if child_frame and child_frame.label:
+        child_frame = _safe_get_frame(ws, edge.target)
+        if child_frame is not None and child_frame.label:
             child_name = child_frame.label
         else:
-            child_atom = ws.get_atom(edge.target)
+            child_atom = _safe_get_atom(ws, edge.target)
             child_name = (
-                child_atom.text[:40] if child_atom else edge.target.short()
+                child_atom.text[:40] if child_atom is not None else edge.target.short()
             )
 
         weight = (
@@ -312,7 +415,7 @@ def _build_tree(ws, hash, tree_node, depth: int, max_depth: int) -> None:
         child_node = tree_node.add(
             f"[{label_style}]{edge.label}[/]  {ARROW}  {child_name}{weight}"
         )
-        if child_frame:
+        if child_frame is not None:
             _build_tree(ws, edge.target, child_node, depth + 1, max_depth)
 
 
@@ -321,15 +424,15 @@ def _build_tree(ws, hash, tree_node, depth: int, max_depth: int) -> None:
 _BAR_WIDTH = 20
 
 
-def mastery_display(mastery: list[tuple[object, float]], ws) -> None:
+def mastery_display(mastery: Sequence[tuple[Any, float]], ws: Any) -> None:
     table = _bare_table("mastery")
     table.add_column("concept")
     table.add_column("level", justify="right", style=C.dim)
     table.add_column("", min_width=_BAR_WIDTH)
 
     for concept_hash, level in sorted(mastery, key=lambda x: x[1]):
-        atom = ws.get_atom(concept_hash)
-        name = atom.text[:40] if atom else concept_hash.short()
+        atom = _safe_get_atom(ws, concept_hash)
+        name = atom.text[:40] if atom is not None else concept_hash.short()
 
         filled = max(0, min(_BAR_WIDTH, int(round(level * _BAR_WIDTH))))
         if level < 0.3:

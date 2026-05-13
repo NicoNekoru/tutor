@@ -497,7 +497,7 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
     try:
         while True:
             try:
-                user_input = display.student_input_prompt()
+                user_input = display.student_input_prompt(commands=SLASH_COMMANDS)
             except (EOFError, KeyboardInterrupt):
                 display.console.print()
                 break
@@ -506,8 +506,9 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
             if not stripped:
                 continue
 
-            # Handle commands.
-            if stripped.lower() in ("/quit", "/exit", "quit", "exit"):
+            cmd = stripped.lower()
+
+            if cmd in ("/quit", "/exit", "quit", "exit"):
                 break
 
             if cmd in ("/help", "/?", "help"):
@@ -544,8 +545,7 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     "Type /help to see what's available."
                 )
                 continue
-            
-            # Regular tutoring turn.
+
             with display.thinking():
                 response = run_turn(state, stripped)
 
