@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 37 Python tests
+pytest -v                    # 39 Python tests
 ```
 
 ### CLI quickstart
@@ -157,6 +157,14 @@ The Rust core is deliberately boring: object serialization, hashing, storage, re
 
 The Python layer (to be built on top of this crate) handles retrieval strategies, execution orchestration, model-provider adapters, and tutoring logic. This separation keeps the storage engine deterministic and inspectable without network access.
 
+### Model/API stance
+
+OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.5` through the Responses API, with OpenRouter retained as an OpenAI-compatible chat-completions fallback. Native provider-specific APIs, such as Anthropic Messages, should be added as explicit adapters before being exposed in `rlm-ws auth`.
+
+The durable workspace remains the source of truth. API-side conversation state, hosted agent traces, and model memory are useful runtime conveniences, but they should not replace Events, Refs, and StudentModel frames unless mirrored back into the object store.
+
+For future orchestration work, prefer typed tool/function calls or strict JSON command outputs. Use the Agents SDK when the application wants an SDK-owned agent loop with tools, approvals, handoffs, streaming, and traces. Use Skills as packaged model/tool instructions at the edge; they are not core object-store primitives.
+
 ### Key invariants
 
 - **`put` never requires network access.** Embeddings are derived, optional, and out-of-band.
@@ -224,7 +232,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 37 tests across 3 test files
+pytest -v                    # 39 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -250,20 +258,19 @@ python/rlm_ws/                  ← Python porcelain layer
 ├── __init__.py                 ← re-exports native types + retrieval
 ├── retrieval.py                ← retrieval strategies, policies, composition
 ├── ingest.py                   ← markdown course parser → workspace objects
-├── session.py                  ← interactive tutoring session (RLM execution loop)
+├── session.py                  ← interactive tutoring session loop
 ├── display.py                  ← rich terminal formatting helpers
 ├── auth.py                     ← API key management (~/.config/rlm-ws/auth.toml)
 ├── templates.py                ← template discovery and application logic
 ├── _template_data/             ← built-in template directories
-│   ├── starter/                ← minimal skeleton (template.json + content/)
-│   └── algorithms/             ← sample algorithms course
+│   └── starter/                ← minimal skeleton (template.json + content/)
 └── cli.py                      ← typer CLI (init, ingest, session, inspect, gc, export)
 
 tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (15 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (10 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (12 tests)
 ```
 
 ### Lint policy

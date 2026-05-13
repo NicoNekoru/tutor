@@ -50,7 +50,7 @@ def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
 def auth(
     provider: Optional[str] = typer.Argument(
         None,
-        help="Provider to configure: openrouter, openai, anthropic",
+        help="Provider to configure: openai, openrouter",
     ),
     show: bool = typer.Option(False, "--show", "-s", help="Show saved keys."),
     set_default: Optional[str] = typer.Option(
@@ -68,9 +68,9 @@ def auth(
     \b
     Examples:
       rlm-ws auth                    # guided setup
-      rlm-ws auth openrouter         # configure OpenRouter
+      rlm-ws auth openai             # configure OpenAI
       rlm-ws auth --show             # show saved keys
-      rlm-ws auth --default openai   # set default provider
+      rlm-ws auth --default openrouter   # set default provider
     """
     from .auth import (
         PROVIDERS,
@@ -93,7 +93,9 @@ def auth(
     if show:
         auth_data = load_auth()
         keys = auth_data.get("keys", {})
-        default = auth_data.get("default", {}).get("provider", "openrouter")
+        from .auth import DEFAULT_PROVIDER
+
+        default = auth_data.get("default", {}).get("provider", DEFAULT_PROVIDER)
         if not keys:
             display.info("No keys saved. Run 'rlm-ws auth' to configure.")
             display.info(f"Config file: {_auth_path()}")
@@ -396,7 +398,7 @@ def session(
         None,
         "--provider",
         "-p",
-        help="Provider from auth config: openrouter, openai, anthropic",
+        help="Provider from auth config: openai, openrouter",
     ),
 ):
     """Start an interactive tutoring session.
@@ -415,13 +417,22 @@ def session(
         raise typer.Exit(1)
 
     # Resolve auth.
-    from .auth import get_api_key
+    from .auth import PROVIDERS, resolve_api_config
     from .session import SessionConfig, run_interactive
 
-    resolved_key, resolved_base, resolved_model = get_api_key(provider)
+    if provider is not None and provider not in PROVIDERS:
+        display.error(
+            f"Unknown provider: '{provider}'. Available: {', '.join(PROVIDERS)}"
+        )
+        raise typer.Exit(1)
+
+    resolved_provider, resolved_key, resolved_base, resolved_model = resolve_api_config(
+        provider
+    )
 
     config = SessionConfig(
         student_id=student,
+        provider=resolved_provider,
         model=model or resolved_model,
         api_key=api_key or resolved_key,
         api_base=api_base or resolved_base,

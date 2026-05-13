@@ -6,12 +6,11 @@ API keys should never be committed).
 
 Format:
     [keys]
-    openrouter = "sk-or-..."
     openai = "sk-..."
-    anthropic = "sk-ant-..."
+    openrouter = "sk-or-..."
 
     [default]
-    provider = "openrouter"
+    provider = "openai"
 """
 
 from __future__ import annotations
@@ -34,36 +33,29 @@ except ImportError:
     tomli_w = None  # type: ignore[assignment]
 
 
+DEFAULT_PROVIDER = "openai"
+
+
 PROVIDERS = {
-    "openrouter": {
-        "name": "OpenRouter",
-        "api_base": "https://openrouter.ai/api/v1",
-        "env_var": "OPENROUTER_API_KEY",
-        "key_prefix": "sk-or-",
-        "signup_url": "https://openrouter.ai/keys",
-        "models": [
-            "anthropic/claude-sonnet-4-20250514",
-            "openai/gpt-4o",
-            "google/gemini-2.5-flash",
-        ],
-    },
     "openai": {
         "name": "OpenAI",
         "api_base": "https://api.openai.com/v1",
         "env_var": "OPENAI_API_KEY",
         "key_prefix": "sk-",
         "signup_url": "https://platform.openai.com/api-keys",
-        "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"],
+        "api_mode": "responses",
+        "models": ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"],
     },
-    "anthropic": {
-        "name": "Anthropic",
-        "api_base": "https://api.anthropic.com/v1",
-        "env_var": "ANTHROPIC_API_KEY",
-        "key_prefix": "sk-ant-",
-        "signup_url": "https://console.anthropic.com/settings/keys",
+    "openrouter": {
+        "name": "OpenRouter",
+        "api_base": "https://openrouter.ai/api/v1",
+        "env_var": "OPENROUTER_API_KEY",
+        "key_prefix": "sk-or-",
+        "signup_url": "https://openrouter.ai/keys",
+        "api_mode": "chat_completions",
         "models": [
-            "claude-sonnet-4-20250514",
-            "claude-haiku-4-5-20251001",
+            "openai/gpt-5.5",
+            "openai/gpt-5.4-mini",
         ],
     },
 }
@@ -111,7 +103,7 @@ def save_auth(data: dict) -> Path:
         lines.append("")
         lines.append("[default]")
         lines.append(
-            f'provider = "{data.get("default", {}).get("provider", "openrouter")}"'
+            f'provider = "{data.get("default", {}).get("provider", DEFAULT_PROVIDER)}"'
         )
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -120,34 +112,47 @@ def save_auth(data: dict) -> Path:
     return path
 
 
-def get_api_key(provider: str | None = None) -> tuple[str, str, str]:
-    """Resolve an API key.
+def resolve_api_config(provider: str | None = None) -> tuple[str, str, str, str]:
+    """Resolve a provider and API key.
 
-    Returns (api_key, api_base, model) by checking:
-    1. Environment variables (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.)
+    Returns (provider, api_key, api_base, model) by checking:
+    1. Environment variables (OPENAI_API_KEY, OPENROUTER_API_KEY, etc.)
     2. ~/.config/rlm-ws/auth.toml
     3. Returns empty strings if nothing found
 
-    If provider is None, uses the default from auth.toml, falling back to openrouter.
+    If provider is None, uses the default from auth.toml, falling back to OpenAI.
     """
     auth = load_auth()
 
     if provider is None:
-        provider = auth.get("default", {}).get("provider", "openrouter")
+        provider = auth.get("default", {}).get("provider", DEFAULT_PROVIDER)
 
-    provider_info = PROVIDERS.get(provider, PROVIDERS["openrouter"])
+    if provider not in PROVIDERS:
+        provider = DEFAULT_PROVIDER
+
+    provider_info = PROVIDERS[provider]
 
     # Check environment variable first.
     env_key = os.environ.get(provider_info["env_var"], "")
     if env_key:
-        return env_key, provider_info["api_base"], provider_info["models"][0]
+        return provider, env_key, provider_info["api_base"], provider_info["models"][0]
 
     # Check auth.toml.
     saved_key = auth.get("keys", {}).get(provider, "")
     if saved_key:
-        return saved_key, provider_info["api_base"], provider_info["models"][0]
+        return provider, saved_key, provider_info["api_base"], provider_info["models"][0]
 
-    return "", provider_info["api_base"], provider_info["models"][0]
+    return provider, "", provider_info["api_base"], provider_info["models"][0]
+
+
+def get_api_key(provider: str | None = None) -> tuple[str, str, str]:
+    """Resolve an API key, API base, and default model.
+
+    Kept as the stable public helper for callers that do not need the resolved
+    provider name.
+    """
+    _, api_key, api_base, model = resolve_api_config(provider)
+    return api_key, api_base, model
 
 
 def set_api_key(provider: str, key: str) -> Path:

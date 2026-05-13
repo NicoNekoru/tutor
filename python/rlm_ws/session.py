@@ -10,12 +10,12 @@ This module implements the session lifecycle:
 6. Loop back to 2
 7. End session → SessionEnd event
 
-Model calls use httpx to hit OpenRouter (or any OpenAI-compatible endpoint).
+Model calls use the Responses API for direct OpenAI requests and
+chat-completions for OpenAI-compatible providers such as OpenRouter.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,16 +46,13 @@ class SessionConfig:
     """Configuration for a tutoring session."""
 
     student_id: str = "default"
-    model: str = "anthropic/claude-sonnet-4-20250514"
-    api_base: str = "https://openrouter.ai/api/v1"
+    provider: str = "openai"
+    model: str = "gpt-5.5"
+    api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
     max_context_results: int = 10
     system_prompt: str = ""
     ws_dir: Path | None = None  # set by CLI; used to load workspace.toml
-
-    def __post_init__(self):
-        if not self.api_key:
-            self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
 
 
 FALLBACK_SYSTEM_PROMPT = """You are a patient, knowledgeable tutor. Your role is to help the student understand concepts deeply, not just memorize facts.
@@ -425,9 +422,73 @@ def _call_model(state: SessionState, system: str) -> str:
             f"> {state.messages[-1]['content']}"
         )
 
+    if _uses_openai_responses(state.config):
+        return _call_openai_responses(state, system)
+    return _call_chat_completions(state, system)
+
+
+def _uses_openai_responses(config: SessionConfig) -> bool:
+    """Return true for direct OpenAI calls using the current Responses API."""
+    return config.provider == "openai" or "api.openai.com" in config.api_base
+
+
+def _call_openai_responses(state: SessionState, system: str) -> str:
+    """Call OpenAI's Responses API and extract text output."""
     try:
         response = httpx.post(
-            f"{state.config.api_base}/chat/completions",
+            f"{state.config.api_base.rstrip('/')}/responses",
+            headers={
+                "Authorization": f"Bearer {state.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": state.config.model,
+                "instructions": system,
+                "input": state.messages,
+                "max_output_tokens": 2048,
+                "store": False,
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        text = _extract_responses_text(data)
+        if text:
+            return text
+        return "_Unexpected API response format: no text output found_"
+
+    except httpx.HTTPStatusError as e:
+        return f"_API error: {e.response.status_code} {e.response.text[:200]}_"
+    except httpx.RequestError as e:
+        return f"_Request failed: {e}_"
+    except (KeyError, IndexError, TypeError) as e:
+        return f"_Unexpected API response format: {e}_"
+
+
+def _extract_responses_text(data: dict) -> str:
+    """Extract text from a Responses API response object."""
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+
+    chunks: list[str] = []
+    for item in data.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") in {"output_text", "text"}:
+                text = content.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+    return "".join(chunks)
+
+
+def _call_chat_completions(state: SessionState, system: str) -> str:
+    """Call an OpenAI-compatible chat-completions endpoint."""
+    try:
+        response = httpx.post(
+            f"{state.config.api_base.rstrip('/')}/chat/completions",
             headers={
                 "Authorization": f"Bearer {state.config.api_key}",
                 "Content-Type": "application/json",
@@ -450,5 +511,5 @@ def _call_model(state: SessionState, system: str) -> str:
         return f"_API error: {e.response.status_code} {e.response.text[:200]}_"
     except httpx.RequestError as e:
         return f"_Request failed: {e}_"
-    except (KeyError, IndexError) as e:
+    except (KeyError, IndexError, TypeError) as e:
         return f"_Unexpected API response format: {e}_"

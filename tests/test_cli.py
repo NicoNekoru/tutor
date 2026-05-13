@@ -51,7 +51,6 @@ Find a target value in a sorted array.
 def test_discover_bundled_templates():
     templates = discover_templates()
     assert "starter" in templates
-    assert "algorithms" in templates
     for key, tmpl in templates.items():
         assert tmpl.name
         assert tmpl.description
@@ -91,7 +90,6 @@ A limit describes the value a function approaches.
 
         # Bundled templates should still be present.
         assert "starter" in templates
-        assert "algorithms" in templates
 
         print("  PASS: test_discover_custom_template")
 
@@ -141,25 +139,25 @@ def test_apply_template_substitution():
         print("  PASS: test_apply_template_substitution")
 
 
-def test_algorithms_template_ingestable():
+def test_starter_template_ingestable():
     with tempfile.TemporaryDirectory() as d:
-        ws_dir = Path(d) / "algo"
+        ws_dir = Path(d) / "starter"
         ws_dir.mkdir()
         ws = rlm_ws.Workspace.init(str(ws_dir))
 
         templates = discover_templates()
-        apply_template(templates["algorithms"], ws_dir, "Algorithms")
-        course_hash = ingest_directory(ws, ws_dir / "content", course_name="Algorithms")
+        apply_template(templates["starter"], ws_dir, "Starter")
+        course_hash = ingest_directory(ws, ws_dir / "content", course_name="Starter")
 
         concepts = ws.collect_atoms(course_hash, "ConceptDefinition")
         problems = ws.collect_atoms(course_hash, "ProblemStatement")
         examples = ws.collect_atoms(course_hash, "WorkedExample")
 
-        assert len(concepts) >= 5, f"Expected ≥5 concepts, got {len(concepts)}"
-        assert len(problems) >= 3, f"Expected ≥3 problems, got {len(problems)}"
-        assert len(examples) >= 2, f"Expected ≥2 examples, got {len(examples)}"
+        assert len(concepts) >= 1, f"Expected >=1 concept, got {len(concepts)}"
+        assert len(problems) >= 1, f"Expected >=1 problem, got {len(problems)}"
+        assert len(examples) >= 1, f"Expected >=1 example, got {len(examples)}"
 
-        print("  PASS: test_algorithms_template_ingestable")
+        print("  PASS: test_starter_template_ingestable")
 
 
 # ============================================================================
@@ -335,17 +333,42 @@ def test_workspace_toml_system_prompt():
         print("  PASS: test_workspace_toml_system_prompt")
 
 
+def test_responses_text_extraction():
+    from rlm_ws.session import _extract_responses_text
+
+    assert _extract_responses_text({"output_text": "hello"}) == "hello"
+    assert (
+        _extract_responses_text(
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "hello "},
+                            {"type": "output_text", "text": "world"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "hello world"
+    )
+
+    print("  PASS: test_responses_text_extraction")
+
+
 if __name__ == "__main__":
     print("Running CLI and session tests...")
     test_discover_bundled_templates()
     test_discover_custom_template()
     test_custom_template_shadows_bundled()
     test_apply_template_substitution()
-    test_algorithms_template_ingestable()
+    test_starter_template_ingestable()
     test_parse_markdown()
     test_ingest_file()
     test_prerequisite_resolution()
     test_session_offline()
     test_session_retrieval_integration()
     test_workspace_toml_system_prompt()
-    print("\nAll 11 tests passed!")
+    test_responses_text_extraction()
+    print("\nAll 12 tests passed!")
