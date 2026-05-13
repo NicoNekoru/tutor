@@ -16,9 +16,12 @@ chat-completions for OpenAI-compatible providers such as OpenRouter.
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -79,6 +82,58 @@ class SessionState:
     student_model: Hash | None = None
     messages: list[dict] = field(default_factory=list)
     turn_count: int = 0
+
+
+@dataclass(frozen=True)
+class RetrievalRecord:
+    """Retrieval output plus the query that produced it."""
+
+    query: RetrievalQuery
+    context_text: str
+    results: list[ScoredCandidate]
+
+
+@dataclass(frozen=True)
+class EngineCommand:
+    """A typed command emitted by the model for the session engine."""
+
+    kind: str
+    arguments: dict[str, Any]
+    source_response_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ParsedModelOutput:
+    """Visible tutor text plus machine-readable engine commands."""
+
+    visible_text: str
+    commands: list[EngineCommand] = field(default_factory=list)
+    raw_text: str = ""
+
+
+COMMAND_PROTOCOL = """\
+## Engine Command Protocol
+
+You may emit engine commands only when the student's state should change.
+Keep student-facing prose separate from machine-readable commands. If you need
+to update mastery, include a final JSON block like:
+
+```json
+{
+  "visible_text": "Short response shown to the student.",
+  "commands": [
+    {
+      "kind": "mastery_update",
+      "arguments": {
+        "concept": "<concept hash>",
+        "level": 0.73,
+        "reason": "evidence from this turn"
+      }
+    }
+  ]
+}
+```
+"""
 
 
 def start_session(ws: Workspace, config: SessionConfig) -> SessionState:
@@ -195,38 +250,66 @@ def run_turn(state: SessionState, user_input: str) -> str:
     )
     state.last_event = input_event
 
-    # 2. Retrieve context.
-    context_text, retrieved = _retrieve_context(state, user_input)
+    # 2. Retrieve context and persist retrieval provenance.
+    retrieval = _retrieve(state, user_input)
+    retrieval_event = _write_retrieval_event(
+        state,
+        input_event,
+        input_atom,
+        retrieval,
+    )
 
-    # 3. Build messages.
+    # 3. Build a first-class call context frame before invoking the model.
+    context_frame = _build_call_context(
+        state,
+        input_atom,
+        retrieval_event,
+        retrieval,
+    )
+    state.last_event = retrieval_event
+
+    # 4. Build messages.
     system = state.config.system_prompt
-    if context_text:
-        system += f"\n\n## Relevant Context\n\n{context_text}"
+    if retrieval.context_text:
+        system += f"\n\n## Relevant Context\n\n{retrieval.context_text}"
+    system += f"\n\n{COMMAND_PROTOCOL}"
 
     state.messages.append({"role": "user", "content": user_input})
 
-    # 4. Call model.
+    # 5. Call model.
     t0 = time.monotonic()
-    response_text = _call_model(state, system)
+    raw_response = _call_model(state, system)
     latency_ms = int((time.monotonic() - t0) * 1000)
+    parsed = _parse_model_output(raw_response)
+    response_text = parsed.visible_text
 
     state.messages.append({"role": "assistant", "content": response_text})
 
-    # 5. Record model output + event.
+    # 6. Record model output + event.
+    output_structured = None
+    if parsed.commands or parsed.raw_text != parsed.visible_text:
+        output_structured = {
+            "commands": [_command_to_dict(c) for c in parsed.commands],
+            "raw_text": parsed.raw_text,
+        }
     output_atom = state.ws.put_atom(
         Atom(
             "ModelOutput",
             response_text,
             tags=["model-output"],
+            structured=output_structured,
         )
     )
 
     call_event = state.ws.put_event(
         Event(
             "ModelCall",
-            parents=[input_event],
-            inputs=[EventRef(input_atom, "student_message")]
-            + [EventRef(c.hash, "retrieved") for c in retrieved[:5]],
+            parents=[retrieval_event],
+            inputs=[
+                EventRef(context_frame, "call_context"),
+                EventRef(input_atom, "student_message"),
+                EventRef(retrieval_event, "retrieval_event"),
+            ],
             outputs=[EventRef(output_atom, "model_output")],
             trace=CallTrace(
                 call_depth=0,
@@ -235,7 +318,15 @@ def run_turn(state: SessionState, user_input: str) -> str:
             ),
         )
     )
-    state.last_event = call_event
+
+    # 7. Apply supported state mutations requested through typed commands.
+    mutation_events = _apply_engine_commands(
+        state,
+        parsed.commands,
+        parent_event=call_event,
+        model_output=output_atom,
+    )
+    state.last_event = mutation_events[-1] if mutation_events else call_event
 
     return response_text
 
@@ -328,11 +419,11 @@ def _init_student_model(ws: Workspace, student_id: str) -> Hash | None:
     return model_hash
 
 
-def _retrieve_context(
+def _retrieve(
     state: SessionState,
     user_input: str,
-) -> tuple[str, list[ScoredCandidate]]:
-    """Run retrieval and format context for the model prompt."""
+) -> RetrievalRecord:
+    """Run retrieval and return both prompt context and provenance data."""
     # Determine intent from a simple heuristic.
     intent = RetrievalIntent.GENERAL
     lower = user_input.lower()
@@ -374,7 +465,7 @@ def _retrieve_context(
         results = []
 
     if not results:
-        return "", []
+        return RetrievalRecord(query=query, context_text="", results=[])
 
     # Format context.
     context_parts = []
@@ -387,7 +478,7 @@ def _retrieve_context(
             for ch, level in sorted(mastery, key=lambda x: x[1]):
                 atom = state.ws.get_atom(ch)
                 name = atom.text[:50] if atom else ch.short()
-                mastery_lines.append(f"  - {name}: {level:.0%}")
+                mastery_lines.append(f"  - {ch.short()} {name}: {level:.0%}")
             context_parts.append("Student mastery:\n" + "\n".join(mastery_lines))
 
     # Retrieved content.
@@ -398,22 +489,425 @@ def _retrieve_context(
         except TypeError:
             atom = None
         if atom:
-            content_parts.append(f"[{atom.kind}] {atom.text}")
+            content_parts.append(
+                f"[{atom.kind} {candidate.hash.to_hex()}] {atom.text}"
+            )
         else:
             try:
                 frame = state.ws.get_frame(candidate.hash)
             except TypeError:
                 frame = None
             if frame and frame.label:
-                content_parts.append(f"[{frame.kind}: {frame.label}]")
+                content_parts.append(
+                    f"[{frame.kind} {candidate.hash.to_hex()}: {frame.label}]"
+                )
 
     if content_parts:
         context_parts.append("Relevant materials:\n" + "\n---\n".join(content_parts))
 
-    return "\n\n".join(context_parts), results
+    return RetrievalRecord(
+        query=query,
+        context_text="\n\n".join(context_parts),
+        results=results,
+    )
 
 
-def _call_model(state: SessionState, system: str) -> str:
+def _retrieve_context(
+    state: SessionState,
+    user_input: str,
+) -> tuple[str, list[ScoredCandidate]]:
+    """Run retrieval and format context for the model prompt."""
+    record = _retrieve(state, user_input)
+    return record.context_text, record.results
+
+
+def _write_retrieval_event(
+    state: SessionState,
+    input_event: Hash,
+    input_atom: Hash,
+    retrieval: RetrievalRecord,
+) -> Hash:
+    """Persist a RetrievalPerformed event with rebuildable query metadata."""
+    query_atom = state.ws.put_atom(
+        Atom(
+            "Config",
+            f"retrieval query for turn {state.turn_count}",
+            tags=["retrieval-query"],
+            structured={
+                "intent": retrieval.query.intent.value,
+                "text_query": retrieval.query.text_query,
+                "focus_concepts": [h.to_hex() for h in retrieval.query.focus_concepts],
+                "target_kinds": retrieval.query.target_kinds,
+                "student_model": (
+                    retrieval.query.student_model.to_hex()
+                    if retrieval.query.student_model
+                    else None
+                ),
+                "max_results": retrieval.query.max_results,
+                "results": [
+                    {
+                        "hash": c.hash.to_hex(),
+                        "score": c.score,
+                        "source_strategy": c.source_strategy,
+                        "explanation": c.explanation,
+                    }
+                    for c in retrieval.results
+                ],
+            },
+        )
+    )
+
+    inputs = [EventRef(input_atom, "student_message")]
+    if state.student_model:
+        inputs.append(EventRef(state.student_model, "student_model"))
+
+    return state.ws.put_event(
+        Event(
+            "RetrievalPerformed",
+            parents=[input_event],
+            inputs=inputs,
+            outputs=[EventRef(query_atom, "retrieval_query")]
+            + [EventRef(c.hash, "retrieved") for c in retrieval.results],
+            tags=["retrieval"],
+        )
+    )
+
+
+def _build_call_context(
+    state: SessionState,
+    input_atom: Hash,
+    retrieval_event: Hash,
+    retrieval: RetrievalRecord,
+) -> Hash:
+    """Build a first-class CallContext frame for model-call provenance."""
+    edges = [
+        Edge("ReceivedInput", input_atom, annotation={"role": "student_message"}),
+        Edge("UsedScope", retrieval_event, annotation={"role": "retrieval_event"}),
+    ]
+
+    if state.student_model:
+        edges.append(
+            Edge(
+                "InScope",
+                state.student_model,
+                annotation={"role": "student_model"},
+            )
+        )
+    if state.last_event:
+        edges.append(
+            Edge(
+                "InScope",
+                state.last_event,
+                annotation={"role": "prior_session_event"},
+            )
+        )
+
+    for rank, candidate in enumerate(
+        retrieval.results[: state.config.max_context_results]
+    ):
+        edges.append(
+            Edge(
+                "InScope",
+                candidate.hash,
+                weight=candidate.score,
+                annotation={
+                    "rank": rank,
+                    "source_strategy": candidate.source_strategy,
+                    "explanation": candidate.explanation,
+                },
+            )
+        )
+
+    return state.ws.put_frame(
+        Frame(
+            "CallContext",
+            edges,
+            tags=["call-context"],
+            label=f"turn-{state.turn_count}",
+        )
+    )
+
+
+def _parse_model_output(raw: str | dict[str, Any]) -> ParsedModelOutput:
+    """Parse visible text and typed engine commands from model output."""
+    if isinstance(raw, dict):
+        return _parse_responses_payload(raw)
+
+    raw_text = raw
+    parsed = _extract_json_command_payload(raw_text)
+    if parsed is None:
+        return ParsedModelOutput(visible_text=raw_text, raw_text=raw_text)
+
+    payload, payload_span = parsed
+    commands = _commands_from_payload(payload)
+    visible_text = ""
+    if isinstance(payload, dict):
+        visible_text = str(
+            payload.get("visible_text") or payload.get("response") or ""
+        ).strip()
+
+    if not visible_text:
+        visible_text = (
+            raw_text[: payload_span[0]] + raw_text[payload_span[1] :]
+        ).strip()
+
+    if not visible_text:
+        visible_text = raw_text.strip()
+
+    return ParsedModelOutput(
+        visible_text=visible_text,
+        commands=commands,
+        raw_text=raw_text,
+    )
+
+
+def _extract_json_command_payload(
+    raw_text: str,
+) -> tuple[Any, tuple[int, int]] | None:
+    """Find and parse the first JSON object/list command payload."""
+    block_match = re.search(
+        r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```",
+        raw_text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if block_match:
+        try:
+            return json.loads(block_match.group(1)), block_match.span()
+        except json.JSONDecodeError:
+            return None
+
+    stripped = raw_text.strip()
+    if stripped.startswith(("{", "[")):
+        try:
+            return json.loads(stripped), (0, len(raw_text))
+        except json.JSONDecodeError:
+            return None
+
+    return None
+
+
+def _parse_responses_payload(data: dict[str, Any]) -> ParsedModelOutput:
+    """Parse text and function-call-shaped items from a Responses payload."""
+    commands: list[EngineCommand] = []
+    response_id = data.get("id") if isinstance(data.get("id"), str) else None
+
+    for item in data.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in {"function_call", "tool_call"}:
+            continue
+        name = item.get("name")
+        if not isinstance(name, str):
+            continue
+        arguments = _coerce_command_arguments(item.get("arguments"))
+        commands.append(
+            EngineCommand(
+                kind=name,
+                arguments=arguments,
+                source_response_id=response_id,
+            )
+        )
+
+    visible_text = _extract_responses_text(data)
+    if not visible_text and not commands:
+        visible_text = "_Unexpected API response format: no text output found_"
+    return ParsedModelOutput(
+        visible_text=visible_text,
+        commands=[c for c in commands if c.kind == "mastery_update"],
+        raw_text=visible_text,
+    )
+
+
+def _commands_from_payload(payload: Any) -> list[EngineCommand]:
+    """Normalize strict JSON payloads into EngineCommand objects."""
+    command_items: list[Any]
+    if isinstance(payload, dict) and isinstance(payload.get("commands"), list):
+        command_items = payload["commands"]
+    elif isinstance(payload, dict) and ("kind" in payload or "name" in payload):
+        command_items = [payload]
+    elif isinstance(payload, list):
+        command_items = payload
+    else:
+        return []
+
+    commands: list[EngineCommand] = []
+    for item in command_items:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind") or item.get("name")
+        if not isinstance(kind, str):
+            continue
+        arguments = _coerce_command_arguments(item.get("arguments", {}))
+        if kind == "mastery_update":
+            commands.append(EngineCommand(kind=kind, arguments=arguments))
+    return commands
+
+
+def _coerce_command_arguments(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _command_to_dict(command: EngineCommand) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "kind": command.kind,
+        "arguments": command.arguments,
+    }
+    if command.source_response_id:
+        data["source_response_id"] = command.source_response_id
+    return data
+
+
+def _apply_engine_commands(
+    state: SessionState,
+    commands: list[EngineCommand],
+    parent_event: Hash,
+    model_output: Hash,
+) -> list[Hash]:
+    """Apply supported model commands and return mutation event hashes."""
+    mutation_events: list[Hash] = []
+    current_parent = parent_event
+    for command in commands:
+        if command.kind != "mastery_update":
+            continue
+        event_hash = _apply_mastery_update(
+            state,
+            command,
+            parent_event=current_parent,
+            model_output=model_output,
+        )
+        if event_hash:
+            mutation_events.append(event_hash)
+            current_parent = event_hash
+    return mutation_events
+
+
+def _apply_mastery_update(
+    state: SessionState,
+    command: EngineCommand,
+    parent_event: Hash,
+    model_output: Hash,
+) -> Hash | None:
+    """Apply a single CAS-backed mastery update command."""
+    if state.student_model is None:
+        return None
+
+    concept_hash = _command_concept_hash(command)
+    level = _command_mastery_level(command)
+    if concept_hash is None or level is None:
+        return None
+
+    old_model_hash = state.student_model
+    old_model = state.ws.get_frame(old_model_hash)
+    if old_model is None:
+        return None
+
+    reason = str(command.arguments.get("reason") or "").strip()
+    updated_edges = []
+    replaced = False
+    for edge in old_model.edges:
+        if edge.label == "MasteryEstimate" and edge.target == concept_hash:
+            updated_edges.append(
+                Edge(
+                    "MasteryEstimate",
+                    concept_hash,
+                    weight=level,
+                    annotation={"reason": reason} if reason else None,
+                )
+            )
+            replaced = True
+        else:
+            updated_edges.append(
+                Edge(
+                    edge.label,
+                    edge.target,
+                    weight=edge.weight,
+                    annotation=edge.annotation,
+                )
+            )
+
+    if not replaced:
+        updated_edges.append(
+            Edge(
+                "MasteryEstimate",
+                concept_hash,
+                weight=level,
+                annotation={"reason": reason} if reason else None,
+            )
+        )
+
+    updated_edges.append(
+        Edge(
+            "InteractionRecord",
+            parent_event,
+            annotation={"source": "mastery_update"},
+        )
+    )
+
+    new_model_hash = state.ws.put_frame(
+        Frame(
+            "StudentModel",
+            updated_edges,
+            tags=old_model.tags,
+            label=old_model.label,
+        )
+    )
+
+    event = Event(
+        "StudentModelUpdate",
+        parents=[parent_event],
+        inputs=[
+            EventRef(old_model_hash, "prior"),
+            EventRef(model_output, "model_output"),
+            EventRef(concept_hash, "concept"),
+        ],
+        outputs=[EventRef(new_model_hash, "updated")],
+        tags=["mastery"],
+    )
+    mastery_ref = f"student/{state.config.student_id}/mastery"
+
+    try:
+        event_hash = state.ws.commit_mutation(
+            event,
+            [(mastery_ref, old_model_hash, new_model_hash)],
+        )
+    except ValueError as exc:
+        display.warn(f"Mastery update skipped: {exc}")
+        return None
+
+    state.student_model = new_model_hash
+    return event_hash
+
+
+def _command_concept_hash(command: EngineCommand) -> Hash | None:
+    raw = command.arguments.get("concept") or command.arguments.get("concept_hash")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return Hash.from_hex(raw)
+    except Exception:
+        return None
+
+
+def _command_mastery_level(command: EngineCommand) -> float | None:
+    raw = command.arguments.get("level")
+    if raw is None:
+        raw = command.arguments.get("mastery")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, value))
+
+
+def _call_model(state: SessionState, system: str) -> str | dict[str, Any]:
     """Call the model API and return the response text."""
     if not state.config.api_key:
         return (
@@ -432,8 +926,8 @@ def _uses_openai_responses(config: SessionConfig) -> bool:
     return config.provider == "openai" or "api.openai.com" in config.api_base
 
 
-def _call_openai_responses(state: SessionState, system: str) -> str:
-    """Call OpenAI's Responses API and extract text output."""
+def _call_openai_responses(state: SessionState, system: str) -> str | dict[str, Any]:
+    """Call OpenAI's Responses API and return the raw response payload."""
     try:
         response = httpx.post(
             f"{state.config.api_base.rstrip('/')}/responses",
@@ -451,11 +945,7 @@ def _call_openai_responses(state: SessionState, system: str) -> str:
             timeout=60.0,
         )
         response.raise_for_status()
-        data = response.json()
-        text = _extract_responses_text(data)
-        if text:
-            return text
-        return "_Unexpected API response format: no text output found_"
+        return response.json()
 
     except httpx.HTTPStatusError as e:
         return f"_API error: {e.response.status_code} {e.response.text[:200]}_"

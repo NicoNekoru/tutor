@@ -252,8 +252,26 @@ def test_session_offline():
         end_session(state)
 
         assert len(ws.events_by_kind("ModelCall")) == 1
+        assert len(ws.events_by_kind("RetrievalPerformed")) == 1
         assert len(ws.events_by_kind("SessionStart")) == 1
         assert len(ws.events_by_kind("SessionEnd")) == 1
+        assert len(ws.frames_by_kind("CallContext")) == 1
+
+        model_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
+        assert model_call is not None
+        input_roles = {ref.role for ref in model_call.inputs}
+        assert "call_context" in input_roles
+        assert "retrieval_event" in input_roles
+
+        context_ref = next(
+            ref.hash for ref in model_call.inputs if ref.role == "call_context"
+        )
+        context_frame = ws.get_frame(context_ref)
+        assert context_frame is not None
+        assert context_frame.kind == "CallContext"
+        edge_labels = {edge.label for edge in context_frame.edges}
+        assert "ReceivedInput" in edge_labels
+        assert "UsedScope" in edge_labels
 
         print("  PASS: test_session_offline")
 
@@ -333,8 +351,70 @@ def test_workspace_toml_system_prompt():
         print("  PASS: test_workspace_toml_system_prompt")
 
 
+def test_session_mastery_update_command():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        course_hash = ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        binary_hash = None
+        for concept_hash, atom in ws.collect_atoms(course_hash, "ConceptDefinition"):
+            if "Binary search" in atom.text:
+                binary_hash = concept_hash
+                break
+        assert binary_hash is not None
+
+        config = SessionConfig(student_id="cmd-test", api_key="")
+        state = start_session(ws, config)
+
+        old_call_model = session_mod._call_model
+        try:
+            session_mod._call_model = lambda _state, _system: (
+                "Tutor prose that should not be shown.\n\n"
+                "```json\n"
+                "{\n"
+                '  "visible_text": "Good, binary search is getting clearer.",\n'
+                '  "commands": [\n'
+                "    {\n"
+                '      "kind": "mastery_update",\n'
+                '      "arguments": {\n'
+                f'        "concept": "{binary_hash.to_hex()}",\n'
+                '        "level": 0.7,\n'
+                '        "reason": "student explained the halving invariant"\n'
+                "      }\n"
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```"
+            )
+            response = run_turn(state, "Binary search halves the search space.")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "Good, binary search is getting clearer."
+        assert len(ws.events_by_kind("RetrievalPerformed")) == 1
+        assert len(ws.frames_by_kind("CallContext")) == 1
+        assert len(ws.events_by_kind("StudentModelUpdate")) == 1
+
+        mastery_ref = ws.get_ref_hash("student/cmd-test/mastery")
+        assert mastery_ref == state.student_model
+        mastery = dict(ws.student_mastery_map(mastery_ref))
+        assert abs(mastery[binary_hash] - 0.7) < 1e-9
+
+        update_event = ws.get_event(ws.events_by_kind("StudentModelUpdate")[0])
+        assert update_event is not None
+        assert any(ref.role == "model_output" for ref in update_event.inputs)
+        assert any(ref.role == "updated" for ref in update_event.outputs)
+
+        end_session(state)
+
+        print("  PASS: test_session_mastery_update_command")
+
+
 def test_responses_text_extraction():
-    from rlm_ws.session import _extract_responses_text
+    from rlm_ws.session import _extract_responses_text, _parse_model_output
 
     assert _extract_responses_text({"output_text": "hello"}) == "hello"
     assert (
@@ -354,6 +434,27 @@ def test_responses_text_extraction():
         == "hello world"
     )
 
+    parsed = _parse_model_output(
+        {
+            "id": "resp_test",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "visible"}],
+                },
+                {
+                    "type": "function_call",
+                    "name": "mastery_update",
+                    "arguments": '{"concept":"abc","level":0.4}',
+                },
+            ],
+        }
+    )
+    assert parsed.visible_text == "visible"
+    assert len(parsed.commands) == 1
+    assert parsed.commands[0].source_response_id == "resp_test"
+    assert parsed.commands[0].arguments["level"] == 0.4
+
     print("  PASS: test_responses_text_extraction")
 
 
@@ -370,5 +471,6 @@ if __name__ == "__main__":
     test_session_offline()
     test_session_retrieval_integration()
     test_workspace_toml_system_prompt()
+    test_session_mastery_update_command()
     test_responses_text_extraction()
-    print("\nAll 12 tests passed!")
+    print("\nAll 13 tests passed!")

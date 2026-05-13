@@ -256,6 +256,67 @@ def test_mastery_aware():
         print("  PASS: test_mastery_aware")
 
 
+def test_mastery_update_changes_future_retrieval():
+    from rlm_ws.session import (
+        EngineCommand,
+        SessionConfig,
+        SessionState,
+        _apply_mastery_update,
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        data = build_course(ws)
+
+        strategy = MasteryAware()
+        before = strategy.retrieve(
+            RetrievalQuery(student_model=data["student_model"]),
+            ws,
+        )
+        before_scores = {c.hash: c.score for c in before}
+        assert (
+            before_scores[data["concepts"]["linked"]]
+            > before_scores[data["concepts"]["binary"]]
+        )
+
+        parent_event = ws.put_event(rlm_ws.Event("ModelCall"))
+        model_output = ws.put_atom(rlm_ws.Atom("ModelOutput", "updated mastery"))
+        state = SessionState(
+            ws=ws,
+            config=SessionConfig(student_id="alice", api_key=""),
+            student_model=data["student_model"],
+        )
+
+        update_event = _apply_mastery_update(
+            state,
+            EngineCommand(
+                kind="mastery_update",
+                arguments={
+                    "concept": data["concepts"]["linked"].to_hex(),
+                    "level": 0.95,
+                    "reason": "student explained pointer traversal",
+                },
+            ),
+            parent_event=parent_event,
+            model_output=model_output,
+        )
+
+        assert update_event is not None
+        assert state.student_model == ws.get_ref_hash("student/alice/mastery")
+
+        after = strategy.retrieve(
+            RetrievalQuery(student_model=state.student_model),
+            ws,
+        )
+        after_scores = {c.hash: c.score for c in after}
+        assert (
+            after_scores[data["concepts"]["binary"]]
+            > after_scores[data["concepts"]["linked"]]
+        )
+
+        print("  PASS: test_mastery_update_changes_future_retrieval")
+
+
 def test_mastery_aware_no_model():
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
@@ -555,6 +616,7 @@ if __name__ == "__main__":
     print("Running retrieval system tests...")
     test_graph_proximity()
     test_mastery_aware()
+    test_mastery_update_changes_future_retrieval()
     test_mastery_aware_no_model()
     test_temporal_recency()
     test_prerequisite_chain()
@@ -568,4 +630,4 @@ if __name__ == "__main__":
     test_failing_strategy_doesnt_crash()
     test_empty_query()
     test_scored_candidate_fields()
-    print("\nAll 15 tests passed!")
+    print("\nAll 16 tests passed!")
