@@ -413,6 +413,88 @@ def test_session_mastery_update_command():
         print("  PASS: test_session_mastery_update_command")
 
 
+def test_session_subcall_command_records_child_call():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        course_hash = ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        binary_hash = None
+        for concept_hash, atom in ws.collect_atoms(course_hash, "ConceptDefinition"):
+            if "Binary search" in atom.text:
+                binary_hash = concept_hash
+                break
+        assert binary_hash is not None
+
+        config = SessionConfig(student_id="subcall-test", api_key="")
+        state = start_session(ws, config)
+
+        calls = []
+        old_call_model = session_mod._call_model
+
+        def fake_call_model(fake_state, _system):
+            calls.append(list(fake_state.messages))
+            if len(calls) == 1:
+                return (
+                    "```json\n"
+                    "{\n"
+                    '  "visible_text": "Let me check the invariant separately.",\n'
+                    '  "commands": [\n'
+                    "    {\n"
+                    '      "kind": "subcall",\n'
+                    '      "arguments": {\n'
+                    '        "intent": "explain_concept",\n'
+                    f'        "concepts": ["{binary_hash.to_hex()}"],\n'
+                    '        "prompt": "Explain the binary search invariant."\n'
+                    "      }\n"
+                    "    }\n"
+                    "  ]\n"
+                    "}\n"
+                    "```"
+                )
+            return "Child explanation of the invariant."
+
+        try:
+            session_mod._call_model = fake_call_model
+            response = run_turn(state, "Can you explain binary search?")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "Let me check the invariant separately."
+        assert len(calls) == 2
+        assert calls[1][0]["content"] == "Explain the binary search invariant."
+
+        model_calls = [
+            (h, ws.get_event(h)) for h in ws.events_by_kind("ModelCall")
+        ]
+        root_hash, root_call = next(
+            (h, e) for h, e in model_calls if e.trace.call_depth == 0
+        )
+        child_hash, child_call = next(
+            (h, e) for h, e in model_calls if e.trace.call_depth == 1
+        )
+
+        assert root_hash != child_hash
+        assert child_call.trace.model == "gpt-5.4-nano"
+        assert any(
+            ref.role == "child_call" and ref.hash == child_hash
+            for ref in root_call.outputs
+        )
+        assert len(ws.events_by_kind("RetrievalPerformed")) == 2
+        assert len(ws.frames_by_kind("CallContext")) == 2
+
+        child_input_roles = {ref.role for ref in child_call.inputs}
+        assert "call_context" in child_input_roles
+        assert "subcall_request" in child_input_roles
+        assert "retrieval_event" in child_input_roles
+
+        end_session(state)
+
+        print("  PASS: test_session_subcall_command_records_child_call")
+
+
 def test_responses_text_extraction():
     from rlm_ws.session import _extract_responses_text, _parse_model_output
 
@@ -455,6 +537,21 @@ def test_responses_text_extraction():
     assert parsed.commands[0].source_response_id == "resp_test"
     assert parsed.commands[0].arguments["level"] == 0.4
 
+    parsed_subcall = _parse_model_output(
+        {
+            "id": "resp_subcall",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "subcall",
+                    "arguments": '{"prompt":"check this","intent":"general"}',
+                }
+            ],
+        }
+    )
+    assert len(parsed_subcall.commands) == 1
+    assert parsed_subcall.commands[0].kind == "subcall"
+
     print("  PASS: test_responses_text_extraction")
 
 
@@ -472,5 +569,6 @@ if __name__ == "__main__":
     test_session_retrieval_integration()
     test_workspace_toml_system_prompt()
     test_session_mastery_update_command()
+    test_session_subcall_command_records_child_call()
     test_responses_text_extraction()
-    print("\nAll 13 tests passed!")
+    print("\nAll 14 tests passed!")

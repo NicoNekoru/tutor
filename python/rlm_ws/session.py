@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,7 @@ class SessionConfig:
     api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
     max_context_results: int = 10
+    max_call_depth: int = 1
     system_prompt: str = ""
     ws_dir: Path | None = None  # set by CLI; used to load workspace.toml
 
@@ -111,12 +112,25 @@ class ParsedModelOutput:
     raw_text: str = ""
 
 
+@dataclass(frozen=True)
+class SubcallResult:
+    """A completed child model call."""
+
+    event_hash: Hash
+    output_hash: Hash
+    visible_text: str
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
-You may emit engine commands only when the student's state should change.
-Keep student-facing prose separate from machine-readable commands. If you need
-to update mastery, include a final JSON block like:
+You may emit engine commands only when the engine should take an action.
+Keep student-facing prose separate from machine-readable commands. Supported
+commands are:
+- mastery_update: update the student's mastery for a concept hash.
+- subcall: request a scoped child call for a focused explanation or check.
+
+If you need a command, include a final JSON block like:
 
 ```json
 {
@@ -128,6 +142,14 @@ to update mastery, include a final JSON block like:
         "concept": "<concept hash>",
         "level": 0.73,
         "reason": "evidence from this turn"
+      }
+    },
+    {
+      "kind": "subcall",
+      "arguments": {
+        "intent": "explain_concept",
+        "concepts": ["<concept hash>"],
+        "prompt": "Explain the invariant briefly."
       }
     }
   ]
@@ -285,12 +307,27 @@ def run_turn(state: SessionState, user_input: str) -> str:
 
     state.messages.append({"role": "assistant", "content": response_text})
 
-    # 6. Record model output + event.
+    # 6. Execute bounded child calls requested by the model.
+    child_results = _execute_subcalls(
+        state,
+        parsed.commands,
+        parent_event=retrieval_event,
+        depth=1,
+    )
+
+    # 7. Record model output + event.
     output_structured = None
-    if parsed.commands or parsed.raw_text != parsed.visible_text:
+    if parsed.commands or parsed.raw_text != parsed.visible_text or child_results:
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
             "raw_text": parsed.raw_text,
+            "child_calls": [
+                {
+                    "event": c.event_hash.to_hex(),
+                    "output": c.output_hash.to_hex(),
+                }
+                for c in child_results
+            ],
         }
     output_atom = state.ws.put_atom(
         Atom(
@@ -310,7 +347,8 @@ def run_turn(state: SessionState, user_input: str) -> str:
                 EventRef(input_atom, "student_message"),
                 EventRef(retrieval_event, "retrieval_event"),
             ],
-            outputs=[EventRef(output_atom, "model_output")],
+            outputs=[EventRef(output_atom, "model_output")]
+            + [EventRef(c.event_hash, "child_call") for c in child_results],
             trace=CallTrace(
                 call_depth=0,
                 model=state.config.model,
@@ -319,7 +357,7 @@ def run_turn(state: SessionState, user_input: str) -> str:
         )
     )
 
-    # 7. Apply supported state mutations requested through typed commands.
+    # 8. Apply supported state mutations requested through typed commands.
     mutation_events = _apply_engine_commands(
         state,
         parsed.commands,
@@ -458,6 +496,12 @@ def _retrieve(
         text_query=user_input,
     )
 
+    return _run_retrieval(state, query)
+
+
+def _run_retrieval(state: SessionState, query: RetrievalQuery) -> RetrievalRecord:
+    """Execute a retrieval query and format context."""
+
     try:
         results = retrieve(query, state.ws)
     except Exception as e:
@@ -523,9 +567,10 @@ def _retrieve_context(
 
 def _write_retrieval_event(
     state: SessionState,
-    input_event: Hash,
+    parent_event: Hash,
     input_atom: Hash,
     retrieval: RetrievalRecord,
+    input_role: str = "student_message",
 ) -> Hash:
     """Persist a RetrievalPerformed event with rebuildable query metadata."""
     query_atom = state.ws.put_atom(
@@ -557,14 +602,14 @@ def _write_retrieval_event(
         )
     )
 
-    inputs = [EventRef(input_atom, "student_message")]
+    inputs = [EventRef(input_atom, input_role)]
     if state.student_model:
         inputs.append(EventRef(state.student_model, "student_model"))
 
     return state.ws.put_event(
         Event(
             "RetrievalPerformed",
-            parents=[input_event],
+            parents=[parent_event],
             inputs=inputs,
             outputs=[EventRef(query_atom, "retrieval_query")]
             + [EventRef(c.hash, "retrieved") for c in retrieval.results],
@@ -578,10 +623,12 @@ def _build_call_context(
     input_atom: Hash,
     retrieval_event: Hash,
     retrieval: RetrievalRecord,
+    input_role: str = "student_message",
+    label: str | None = None,
 ) -> Hash:
     """Build a first-class CallContext frame for model-call provenance."""
     edges = [
-        Edge("ReceivedInput", input_atom, annotation={"role": "student_message"}),
+        Edge("ReceivedInput", input_atom, annotation={"role": input_role}),
         Edge("UsedScope", retrieval_event, annotation={"role": "retrieval_event"}),
     ]
 
@@ -623,7 +670,7 @@ def _build_call_context(
             "CallContext",
             edges,
             tags=["call-context"],
-            label=f"turn-{state.turn_count}",
+            label=label or f"turn-{state.turn_count}",
         )
     )
 
@@ -713,7 +760,7 @@ def _parse_responses_payload(data: dict[str, Any]) -> ParsedModelOutput:
         visible_text = "_Unexpected API response format: no text output found_"
     return ParsedModelOutput(
         visible_text=visible_text,
-        commands=[c for c in commands if c.kind == "mastery_update"],
+        commands=[c for c in commands if _is_supported_command(c.kind)],
         raw_text=visible_text,
     )
 
@@ -738,9 +785,13 @@ def _commands_from_payload(payload: Any) -> list[EngineCommand]:
         if not isinstance(kind, str):
             continue
         arguments = _coerce_command_arguments(item.get("arguments", {}))
-        if kind == "mastery_update":
+        if _is_supported_command(kind):
             commands.append(EngineCommand(kind=kind, arguments=arguments))
     return commands
+
+
+def _is_supported_command(kind: str) -> bool:
+    return kind in {"mastery_update", "subcall"}
 
 
 def _coerce_command_arguments(value: Any) -> dict[str, Any]:
@@ -763,6 +814,206 @@ def _command_to_dict(command: EngineCommand) -> dict[str, Any]:
     if command.source_response_id:
         data["source_response_id"] = command.source_response_id
     return data
+
+
+def _execute_subcalls(
+    state: SessionState,
+    commands: list[EngineCommand],
+    parent_event: Hash,
+    depth: int,
+) -> list[SubcallResult]:
+    """Execute bounded recursive subcall commands."""
+    if depth > state.config.max_call_depth:
+        return []
+
+    results: list[SubcallResult] = []
+    for command in commands:
+        if command.kind != "subcall":
+            continue
+        result = _execute_subcall(
+            state,
+            command,
+            parent_event=parent_event,
+            depth=depth,
+        )
+        if result:
+            results.append(result)
+    return results
+
+
+def _execute_subcall(
+    state: SessionState,
+    command: EngineCommand,
+    parent_event: Hash,
+    depth: int,
+) -> SubcallResult | None:
+    """Execute a single child model call and record its event."""
+    prompt = _subcall_prompt(command)
+    if not prompt:
+        return None
+
+    request_atom = state.ws.put_atom(
+        Atom(
+            "Config",
+            f"subcall request depth {depth}",
+            tags=["subcall-request"],
+            structured=command.arguments,
+        )
+    )
+
+    retrieval = _run_retrieval(state, _subcall_query(state, command))
+    retrieval_event = _write_retrieval_event(
+        state,
+        parent_event,
+        request_atom,
+        retrieval,
+        input_role="subcall_request",
+    )
+    context_frame = _build_call_context(
+        state,
+        request_atom,
+        retrieval_event,
+        retrieval,
+        input_role="subcall_request",
+        label=f"turn-{state.turn_count}-subcall-{depth}",
+    )
+
+    system = state.config.system_prompt
+    if retrieval.context_text:
+        system += f"\n\n## Relevant Context\n\n{retrieval.context_text}"
+    if depth < state.config.max_call_depth:
+        system += f"\n\n{COMMAND_PROTOCOL}"
+
+    model = _subcall_model(state, command, depth)
+    sub_state = SessionState(
+        ws=state.ws,
+        config=replace(state.config, model=model),
+        session_event=state.session_event,
+        last_event=retrieval_event,
+        student_model=state.student_model,
+        messages=[{"role": "user", "content": prompt}],
+        turn_count=state.turn_count,
+    )
+
+    t0 = time.monotonic()
+    raw_response = _call_model(sub_state, system)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    parsed = _parse_model_output(raw_response)
+
+    nested_results = _execute_subcalls(
+        state,
+        parsed.commands,
+        parent_event=retrieval_event,
+        depth=depth + 1,
+    )
+
+    output_structured = None
+    if parsed.commands or parsed.raw_text != parsed.visible_text or nested_results:
+        output_structured = {
+            "commands": [_command_to_dict(c) for c in parsed.commands],
+            "raw_text": parsed.raw_text,
+            "child_calls": [
+                {
+                    "event": c.event_hash.to_hex(),
+                    "output": c.output_hash.to_hex(),
+                }
+                for c in nested_results
+            ],
+        }
+
+    output_atom = state.ws.put_atom(
+        Atom(
+            "ModelOutput",
+            parsed.visible_text,
+            tags=["model-output", "subcall-output"],
+            structured=output_structured,
+        )
+    )
+
+    call_event = state.ws.put_event(
+        Event(
+            "ModelCall",
+            parents=[retrieval_event],
+            inputs=[
+                EventRef(context_frame, "call_context"),
+                EventRef(request_atom, "subcall_request"),
+                EventRef(retrieval_event, "retrieval_event"),
+            ],
+            outputs=[EventRef(output_atom, "model_output")]
+            + [EventRef(c.event_hash, "child_call") for c in nested_results],
+            trace=CallTrace(
+                call_depth=depth,
+                model=model,
+                latency_ms=latency_ms,
+            ),
+        )
+    )
+
+    return SubcallResult(
+        event_hash=call_event,
+        output_hash=output_atom,
+        visible_text=parsed.visible_text,
+    )
+
+
+def _subcall_prompt(command: EngineCommand) -> str:
+    for key in ("prompt", "question", "text_query", "task"):
+        value = command.arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _subcall_query(state: SessionState, command: EngineCommand) -> RetrievalQuery:
+    concepts = _command_concept_hashes(command)
+    text_query = _subcall_prompt(command)
+    intent = _command_intent(command)
+    return RetrievalQuery(
+        focus_concepts=concepts,
+        intent=intent,
+        student_model=state.student_model,
+        max_results=state.config.max_context_results,
+        text_query=text_query,
+    )
+
+
+def _command_concept_hashes(command: EngineCommand) -> list[Hash]:
+    raw_values: list[Any] = []
+    concepts = command.arguments.get("concepts")
+    if isinstance(concepts, list):
+        raw_values.extend(concepts)
+    concept = command.arguments.get("concept") or command.arguments.get("concept_hash")
+    if concept:
+        raw_values.append(concept)
+
+    hashes: list[Hash] = []
+    for raw in raw_values:
+        if not isinstance(raw, str):
+            continue
+        try:
+            hashes.append(Hash.from_hex(raw))
+        except Exception:
+            continue
+    return hashes
+
+
+def _command_intent(command: EngineCommand) -> RetrievalIntent:
+    raw = command.arguments.get("intent")
+    if isinstance(raw, str):
+        try:
+            return RetrievalIntent(raw)
+        except ValueError:
+            pass
+    return RetrievalIntent.GENERAL
+
+
+def _subcall_model(state: SessionState, command: EngineCommand, depth: int) -> str:
+    model = command.arguments.get("model")
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    if depth > 0 and state.config.model == "gpt-5.4-mini":
+        return "gpt-5.4-nano"
+    return state.config.model
 
 
 def _apply_engine_commands(
