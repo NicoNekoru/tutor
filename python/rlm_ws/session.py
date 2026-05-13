@@ -23,8 +23,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from .rlm_ws import (
     Atom,
     Edge,
@@ -42,6 +40,7 @@ from .retrieval import (
     retrieve,
 )
 from . import display
+from .providers import ModelRequest, adapter_for
 
 
 @dataclass
@@ -1361,51 +1360,21 @@ def _command_mastery_level(command: EngineCommand) -> float | None:
 
 
 def _call_model(state: SessionState, system: str) -> str | dict[str, Any]:
-    """Call the model API and return the response text."""
-    if not state.config.api_key:
-        return (
-            "_No API key configured. Run `rlm-ws auth` to set one up. "
-            "Running in offline mode — I'll echo your input back._\n\n"
-            f"> {state.messages[-1]['content']}"
-        )
-
-    if _uses_openai_responses(state.config):
-        return _call_openai_responses(state, system)
-    return _call_chat_completions(state, system)
-
-
-def _uses_openai_responses(config: SessionConfig) -> bool:
-    """Return true for direct OpenAI calls using the current Responses API."""
-    return config.provider == "openai" or "api.openai.com" in config.api_base
-
-
-def _call_openai_responses(state: SessionState, system: str) -> str | dict[str, Any]:
-    """Call OpenAI's Responses API and return the raw response payload."""
-    try:
-        response = httpx.post(
-            f"{state.config.api_base.rstrip('/')}/responses",
-            headers={
-                "Authorization": f"Bearer {state.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": state.config.model,
-                "instructions": system,
-                "input": state.messages,
-                "max_output_tokens": 2048,
-                "store": False,
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    except httpx.HTTPStatusError as e:
-        return f"_API error: {e.response.status_code} {e.response.text[:200]}_"
-    except httpx.RequestError as e:
-        return f"_Request failed: {e}_"
-    except (KeyError, IndexError, TypeError) as e:
-        return f"_Unexpected API response format: {e}_"
+    """Call the configured model provider and return the raw response payload."""
+    request = ModelRequest(
+        provider=state.config.provider,
+        model=state.config.model,
+        api_base=state.config.api_base,
+        api_key=state.config.api_key,
+        system=system,
+        messages=list(state.messages),
+    )
+    adapter = adapter_for(
+        state.config.provider,
+        state.config.api_base,
+        state.config.api_key,
+    )
+    return adapter.call(request)
 
 
 def _extract_responses_text(data: dict) -> str:
@@ -1426,33 +1395,3 @@ def _extract_responses_text(data: dict) -> str:
                     chunks.append(text)
     return "".join(chunks)
 
-
-def _call_chat_completions(state: SessionState, system: str) -> str:
-    """Call an OpenAI-compatible chat-completions endpoint."""
-    try:
-        response = httpx.post(
-            f"{state.config.api_base.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {state.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": state.config.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    *state.messages,
-                ],
-                "max_tokens": 2048,
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
-
-    except httpx.HTTPStatusError as e:
-        return f"_API error: {e.response.status_code} {e.response.text[:200]}_"
-    except httpx.RequestError as e:
-        return f"_Request failed: {e}_"
-    except (KeyError, IndexError, TypeError) as e:
-        return f"_Unexpected API response format: {e}_"

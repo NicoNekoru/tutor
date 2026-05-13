@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 42 Python tests
+pytest -v                    # 43 Python tests
 ```
 
 ### CLI quickstart
@@ -160,7 +160,7 @@ The Python layer (to be built on top of this crate) handles retrieval strategies
 
 ### Model/API stance
 
-OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.4-mini` through the Responses API by default, with `gpt-5.4-nano` available as the lower-cost option and `gpt-5.5` reserved for explicit high-complexity overrides. OpenRouter is retained as an OpenAI-compatible chat-completions fallback. Native provider-specific APIs, such as Anthropic Messages, should be added as explicit adapters before being exposed in `rlm-ws auth`.
+OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.4-mini` through the Responses API by default, with `gpt-5.4-nano` available as the lower-cost option and `gpt-5.5` reserved for explicit high-complexity overrides. OpenRouter is retained as an OpenAI-compatible chat-completions fallback. Model calls go through explicit provider adapters; native provider-specific APIs, such as Anthropic Messages, should be added as adapters before being exposed in `rlm-ws auth`.
 
 The durable workspace remains the source of truth. API-side conversation state, hosted agent traces, and model memory are useful runtime conveniences, but they should not replace Events, Refs, and StudentModel frames unless mirrored back into the object store.
 
@@ -235,7 +235,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 42 tests across 3 test files
+pytest -v                    # 43 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -262,6 +262,7 @@ python/rlm_ws/                  ← Python porcelain layer
 ├── retrieval.py                ← retrieval strategies, policies, composition
 ├── ingest.py                   ← markdown course parser → workspace objects
 ├── session.py                  ← interactive tutoring session loop
+├── providers.py                ← model provider adapters
 ├── display.py                  ← rich terminal formatting helpers
 ├── auth.py                     ← API key management (~/.config/rlm-ws/auth.toml)
 ├── templates.py                ← template discovery and application logic
@@ -273,7 +274,7 @@ tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (16 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (14 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (15 tests)
 ```
 
 ### Lint policy

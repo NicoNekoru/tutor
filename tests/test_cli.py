@@ -614,6 +614,103 @@ def test_responses_text_extraction():
     print("  PASS: test_responses_text_extraction")
 
 
+def test_provider_adapters_shape_http_requests():
+    import rlm_ws.providers as providers
+    from rlm_ws.providers import ModelRequest, adapter_for
+
+    posts = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers, json, timeout):
+        posts.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        if url.endswith("/responses"):
+            return FakeResponse({"output_text": "responses ok"})
+        return FakeResponse({"choices": [{"message": {"content": "chat ok"}}]})
+
+    old_post = providers.httpx.post
+    providers.httpx.post = fake_post
+
+    try:
+        openai_request = ModelRequest(
+            provider="openai",
+            model="gpt-5.4-mini",
+            api_base="https://api.openai.com/v1",
+            api_key="sk-test",
+            system="system prompt",
+            messages=[{"role": "user", "content": "question"}],
+        )
+        openai_adapter = adapter_for("openai", openai_request.api_base, "sk-test")
+        assert openai_adapter.api_mode == "responses"
+        assert openai_adapter.call(openai_request) == {
+            "output_text": "responses ok"
+        }
+
+        chat_request = ModelRequest(
+            provider="openrouter",
+            model="openai/gpt-5.4-mini",
+            api_base="https://openrouter.ai/api/v1",
+            api_key="sk-or-test",
+            system="system prompt",
+            messages=[{"role": "user", "content": "question"}],
+        )
+        chat_adapter = adapter_for("openrouter", chat_request.api_base, "sk-or-test")
+        assert chat_adapter.api_mode == "chat_completions"
+        assert chat_adapter.call(chat_request) == "chat ok"
+
+        offline_adapter = adapter_for("openai", openai_request.api_base, "")
+        assert offline_adapter.api_mode == "offline"
+        assert "question" in offline_adapter.call(
+            ModelRequest(
+                provider="openai",
+                model="gpt-5.4-mini",
+                api_base=openai_request.api_base,
+                api_key="",
+                system="system prompt",
+                messages=[{"role": "user", "content": "question"}],
+            )
+        )
+
+        assert posts[0]["url"] == "https://api.openai.com/v1/responses"
+        assert posts[0]["headers"]["Authorization"] == "Bearer sk-test"
+        assert posts[0]["json"]["instructions"] == "system prompt"
+        assert posts[0]["json"]["input"] == [
+            {"role": "user", "content": "question"}
+        ]
+        assert posts[0]["json"]["max_output_tokens"] == 2048
+        assert posts[0]["json"]["store"] is False
+
+        assert (
+            posts[1]["url"]
+            == "https://openrouter.ai/api/v1/chat/completions"
+        )
+        assert posts[1]["headers"]["Authorization"] == "Bearer sk-or-test"
+        assert posts[1]["json"]["messages"][0] == {
+            "role": "system",
+            "content": "system prompt",
+        }
+        assert posts[1]["json"]["max_tokens"] == 2048
+    finally:
+        providers.httpx.post = old_post
+
+    print("  PASS: test_provider_adapters_shape_http_requests")
+
+
 if __name__ == "__main__":
     print("Running CLI and session tests...")
     test_discover_bundled_templates()
@@ -630,4 +727,5 @@ if __name__ == "__main__":
     test_session_mastery_update_command()
     test_session_subcall_command_records_child_call()
     test_responses_text_extraction()
-    print("\nAll 14 tests passed!")
+    test_provider_adapters_shape_http_requests()
+    print("\nAll 15 tests passed!")
