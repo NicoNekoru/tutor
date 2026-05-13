@@ -463,14 +463,36 @@ def session_trace_rows(
     return rows
 
 
+SLASH_COMMANDS: list[tuple[str, str]] = [
+    ("/help", "show available commands"),
+    ("/mastery", "show current mastery levels"),
+    ("/tree", "show course structure"),
+    ("/status", "session and workspace stats"),
+    ("/quit", "end the session (or press ^D)"),
+]
+
+
 def run_interactive(ws: Workspace, config: SessionConfig) -> None:
     """Run an interactive tutoring session in the terminal."""
     state = start_session(ws, config)
 
-    display.console.print()
-    display.info("Type your questions or 'quit' to end the session.")
-    display.info("Commands: /mastery, /tree, /status, /quit")
-    display.console.print()
+    course_name = ""
+    if config.ws_dir:
+        from .templates import load_workspace_config
+
+        ws_config = load_workspace_config(config.ws_dir)
+        course_name = (
+            ws_config.get("answers", {}).get("course_name", "")
+            or ws_config.get("workspace", {}).get("name", "")
+            or config.ws_dir.name
+        )
+
+    display.welcome_banner(
+        course=course_name,
+        student=config.student_id,
+        model=config.model,
+        extra_lines=("/help for commands  ·  ^D or /quit to exit",),
+    )
 
     try:
         while True:
@@ -488,7 +510,11 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
             if stripped.lower() in ("/quit", "/exit", "quit", "exit"):
                 break
 
-            if stripped.lower() == "/mastery":
+            if cmd in ("/help", "/?", "help"):
+                display.slash_help(SLASH_COMMANDS)
+                continue
+
+            if cmd == "/mastery":
                 if state.student_model:
                     mastery = ws.student_mastery_map(state.student_model)
                     display.mastery_display(mastery, ws)
@@ -496,7 +522,7 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.warn("No student model loaded")
                 continue
 
-            if stripped.lower() == "/tree":
+            if cmd == "/tree":
                 course_hash = ws.get_ref_hash("course/structure")
                 if course_hash:
                     display.course_tree(ws, course_hash)
@@ -504,19 +530,26 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.warn("No course structure found")
                 continue
 
-            if stripped.lower() == "/status":
+            if cmd == "/status":
                 atoms, frames, events = ws.object_counts()
                 display.object_counts_display(atoms, frames, events)
-                display.info(f"Turn: {state.turn_count}")
-                display.info(f"Student: {config.student_id}")
-                display.info(f"Model: {config.model}")
+                display.info(f"turn      {state.turn_count}")
+                display.info(f"student   {config.student_id}")
+                display.info(f"prof      {config.model}")
                 continue
 
+            if cmd.startswith("/"):
+                display.warn(
+                    f"Unknown command: {stripped.split()[0]}. "
+                    "Type /help to see what's available."
+                )
+                continue
+            
             # Regular tutoring turn.
-            with display.console.status("[cyan]Thinking...", spinner="dots"):
+            with display.thinking():
                 response = run_turn(state, stripped)
 
-            display.model_response(response)
+            display.prof_says(response)
 
     finally:
         end_session(state)

@@ -442,9 +442,7 @@ def session(
     if not config.api_key:
         display.warn("No API key configured. Running in offline mode.")
         display.info("Run 'rlm-ws auth' to configure a provider.")
-        display.console.print()
 
-    display.header("rlm-ws", f"Tutoring session • student: {student}")
     run_interactive(ws, config)
 
 
