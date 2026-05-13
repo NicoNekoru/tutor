@@ -851,6 +851,12 @@ impl PyWorkspace {
         String::from_utf8(buf).map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    fn import_json(&self, json: &str) -> PyResult<(usize, usize, usize)> {
+        let mut reader = std::io::Cursor::new(json.as_bytes());
+        let report = self.inner.import_json(&mut reader).map_err(to_pyerr)?;
+        Ok((report.atoms, report.frames, report.events))
+    }
+
     fn object_counts(&self) -> PyResult<(usize, usize, usize)> {
         self.inner.index.object_counts().map_err(to_pyerr)
     }

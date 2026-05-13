@@ -46,6 +46,7 @@ rlm-ws inspect --sessions alice         # view persisted session traces
 rlm-ws auth --show                      # show saved API keys
 rlm-ws gc                               # garbage collection
 rlm-ws export course/structure -o out.json
+rlm-ws import out.json --set-ref course/imported
 ```
 
 ### Course markdown format

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::envelope::Storable;
@@ -26,6 +26,14 @@ pub struct GcReport {
     pub reachable_objects: usize,
     pub removed_objects: usize,
     pub removed_hashes: Vec<Hash>,
+}
+
+/// Report from JSON import.
+#[derive(Debug, Default)]
+pub struct ImportReport {
+    pub atoms: usize,
+    pub frames: usize,
+    pub events: usize,
 }
 
 /// The top-level workspace handle. Owns the object store, ref store, and index.
@@ -229,11 +237,90 @@ impl Workspace {
             }
         }
 
-        let output = serde_json::json!({ "objects": entries });
+        let output = serde_json::json!({
+            "root": root.to_hex(),
+            "objects": entries,
+        });
         serde_json::to_writer_pretty(writer, &output)
             .map_err(|e| Error::Serialization(e.to_string()))?;
         Ok(())
     }
+
+    /// Import objects previously produced by `export_json`.
+    ///
+    /// Each imported object is rehashed and must match the exported hash. Objects
+    /// are written through `put`, so the operation is idempotent and updates the
+    /// derived index.
+    pub fn import_json(&self, reader: &mut dyn Read) -> Result<ImportReport> {
+        let value: serde_json::Value =
+            serde_json::from_reader(reader).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let objects = value
+            .get("objects")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| Error::Deserialization("missing objects array".into()))?;
+
+        let mut report = ImportReport::default();
+        for entry in objects {
+            let object_type = entry
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| Error::Deserialization("missing object type".into()))?;
+            let expected_hash = entry
+                .get("hash")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| Error::Deserialization("missing object hash".into()))
+                .and_then(Hash::from_hex)?;
+            let data = entry
+                .get("data")
+                .ok_or_else(|| Error::Deserialization("missing object data".into()))?
+                .clone();
+
+            match object_type {
+                "Atom" => {
+                    let object: Atom = serde_json::from_value(data)
+                        .map_err(|e| Error::Deserialization(e.to_string()))?;
+                    let actual_hash = object.compute_hash()?;
+                    verify_import_hash(object_type, expected_hash, actual_hash)?;
+                    self.put(&object)?;
+                    report.atoms += 1;
+                }
+                "Frame" => {
+                    let object: Frame = serde_json::from_value(data)
+                        .map_err(|e| Error::Deserialization(e.to_string()))?;
+                    let actual_hash = object.compute_hash()?;
+                    verify_import_hash(object_type, expected_hash, actual_hash)?;
+                    self.put(&object)?;
+                    report.frames += 1;
+                }
+                "Event" => {
+                    let object: Event = serde_json::from_value(data)
+                        .map_err(|e| Error::Deserialization(e.to_string()))?;
+                    let actual_hash = object.compute_hash()?;
+                    verify_import_hash(object_type, expected_hash, actual_hash)?;
+                    self.put(&object)?;
+                    report.events += 1;
+                }
+                other => {
+                    return Err(Error::Deserialization(format!(
+                        "unknown object type: {other}"
+                    )));
+                }
+            }
+        }
+
+        Ok(report)
+    }
+}
+
+fn verify_import_hash(object_type: &str, expected: Hash, actual: Hash) -> Result<()> {
+    if expected == actual {
+        return Ok(());
+    }
+    Err(Error::InvalidHash(format!(
+        "imported {object_type} expected {} but computed {}",
+        expected.to_hex(),
+        actual.to_hex()
+    )))
 }
 
 #[cfg(test)]
@@ -493,8 +580,20 @@ mod tests {
         let mut buf = Vec::new();
         ws.export_json(&lh, &mut buf).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(json["root"].as_str(), Some(lh.to_hex().as_str()));
         let objects = json["objects"].as_array().unwrap();
         assert_eq!(objects.len(), 2); // lesson frame + concept atom
+
+        let imported_dir = TempDir::new().unwrap();
+        let imported = Workspace::init(imported_dir.path()).unwrap();
+        let report = imported
+            .import_json(&mut std::io::Cursor::new(buf))
+            .unwrap();
+        assert_eq!(report.atoms, 1);
+        assert_eq!(report.frames, 1);
+        assert_eq!(report.events, 0);
+        assert!(imported.get::<Atom>(&ch).unwrap().is_some());
+        assert!(imported.get::<Frame>(&lh).unwrap().is_some());
     }
 
     #[test]

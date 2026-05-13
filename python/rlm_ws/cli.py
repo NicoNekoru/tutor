@@ -552,3 +552,63 @@ def export(
         display.success(f"Exported to {output}")
     else:
         display.console.print(json_str)
+
+
+@app.command("import")
+def import_graph(
+    input_path: Path = typer.Argument(
+        ...,
+        help="JSON file produced by rlm-ws export.",
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
+    workspace: Optional[Path] = typer.Option(None, "--workspace", "-w"),
+    set_ref: Optional[str] = typer.Option(
+        None,
+        "--set-ref",
+        help="Set this ref to the imported root hash.",
+    ),
+    root: Optional[str] = typer.Option(
+        None,
+        "--root",
+        help="Root hash to use with --set-ref if the JSON has no root field.",
+    ),
+):
+    """Import a JSON subgraph produced by export."""
+    import json
+
+    from .rlm_ws import Hash
+
+    ws, ws_dir = _resolve_workspace(workspace)
+    json_str = input_path.read_text(encoding="utf-8")
+    try:
+        atoms, frames, events = ws.import_json(json_str)
+    except Exception as exc:
+        display.error(f"Import failed: {exc}")
+        raise typer.Exit(1)
+
+    display.success(
+        f"Imported {atoms} atom(s), {frames} frame(s), {events} event(s)"
+    )
+
+    if set_ref:
+        root_hash = root
+        if root_hash is None:
+            try:
+                payload = json.loads(json_str)
+            except json.JSONDecodeError:
+                payload = {}
+            root_hash = payload.get("root") if isinstance(payload, dict) else None
+
+        if not isinstance(root_hash, str) or not root_hash.strip():
+            display.error("--set-ref requires --root when the import has no root")
+            raise typer.Exit(1)
+
+        try:
+            target = Hash.from_hex(root_hash)
+        except Exception:
+            display.error(f"Invalid root hash: {root_hash}")
+            raise typer.Exit(1)
+        ws.set_ref(set_ref, target)
+        display.success(f"Set {set_ref} -> {target.short()}")

@@ -358,7 +358,15 @@ def test_export_json():
         export_str = ws.export_json(fh)
         data = json.loads(export_str)
         assert "objects" in data
+        assert data["root"] == fh.to_hex()
         assert len(data["objects"]) == 2  # frame + atom
+
+        with tempfile.TemporaryDirectory() as import_dir:
+            imported = rlm_ws.Workspace.init(import_dir)
+            atoms, frames, events = imported.import_json(export_str)
+            assert (atoms, frames, events) == (1, 1, 0)
+            assert imported.get_atom(c) is not None
+            assert imported.get_frame(fh) is not None
 
         print("  PASS: test_export_json")
 
