@@ -15,14 +15,14 @@ description = "A flexible workspace — you define the learning relationship"
 
 [[prompts]]
 key = "student_identity"
-question = "Who am I?"
+question = "Who are you?"
 type = "text"
 help = "Describe the student — background, experience level, goals"
 required = true
 
 [[prompts]]
 key = "tutor_identity"
-question = "Who are you?"
+question = "Who am I?"
 type = "text"
 help = "Describe the tutor persona — expertise, style, personality"
 required = true
