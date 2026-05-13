@@ -159,7 +159,7 @@ The Python layer (to be built on top of this crate) handles retrieval strategies
 
 ### Model/API stance
 
-OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.5` through the Responses API, with OpenRouter retained as an OpenAI-compatible chat-completions fallback. Native provider-specific APIs, such as Anthropic Messages, should be added as explicit adapters before being exposed in `rlm-ws auth`.
+OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.4-mini` through the Responses API by default, with `gpt-5.4-nano` available as the lower-cost option and `gpt-5.5` reserved for explicit high-complexity overrides. OpenRouter is retained as an OpenAI-compatible chat-completions fallback. Native provider-specific APIs, such as Anthropic Messages, should be added as explicit adapters before being exposed in `rlm-ws auth`.
 
 The durable workspace remains the source of truth. API-side conversation state, hosted agent traces, and model memory are useful runtime conveniences, but they should not replace Events, Refs, and StudentModel frames unless mirrored back into the object store.
 

@@ -435,7 +435,7 @@ fn test_full_tutoring_session() {
             }],
             outputs: vec![],
             trace: CallTrace {
-                model: Some("gpt-5.4-mini".into()),
+                model: Some("gpt-5.4-nano".into()),
                 call_depth: 1,
                 input_tokens: Some(500),
                 output_tokens: Some(100),
@@ -475,7 +475,7 @@ fn test_full_tutoring_session() {
                 },
             ],
             trace: CallTrace {
-                model: Some("gpt-5.5".into()),
+                model: Some("gpt-5.4-mini".into()),
                 call_depth: 0,
                 input_tokens: Some(2000),
                 output_tokens: Some(500),
@@ -612,7 +612,7 @@ fn test_full_tutoring_session() {
     assert_eq!(tree.children[0].event.trace.call_depth, 1);
     assert_eq!(
         tree.children[0].event.trace.model.as_deref(),
-        Some("gpt-5.4-mini")
+        Some("gpt-5.4-nano")
     );
 
     // =========================================================

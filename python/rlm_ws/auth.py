@@ -44,7 +44,7 @@ PROVIDERS = {
         "key_prefix": "sk-",
         "signup_url": "https://platform.openai.com/api-keys",
         "api_mode": "responses",
-        "models": ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"],
+        "models": ["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5"],
     },
     "openrouter": {
         "name": "OpenRouter",
@@ -54,8 +54,9 @@ PROVIDERS = {
         "signup_url": "https://openrouter.ai/keys",
         "api_mode": "chat_completions",
         "models": [
-            "openai/gpt-5.5",
             "openai/gpt-5.4-mini",
+            "openai/gpt-5.4-nano",
+            "openai/gpt-5.5",
         ],
     },
 }

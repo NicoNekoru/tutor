@@ -167,7 +167,7 @@ def test_events_and_session():
         output_atom = ws.put_atom(rlm_ws.Atom("ModelOutput", "Recursion is..."))
         trace = rlm_ws.CallTrace(
             call_depth=0,
-            model="gpt-5.5",
+            model="gpt-5.4-mini",
             input_tokens=1000,
             output_tokens=200,
             latency_ms=1500,

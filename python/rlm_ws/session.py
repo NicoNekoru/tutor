@@ -47,7 +47,7 @@ class SessionConfig:
 
     student_id: str = "default"
     provider: str = "openai"
-    model: str = "gpt-5.5"
+    model: str = "gpt-5.4-mini"
     api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
     max_context_results: int = 10
