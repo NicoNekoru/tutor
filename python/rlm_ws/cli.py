@@ -459,12 +459,17 @@ def inspect(
     refs: bool = typer.Option(False, "--refs", "-r"),
     tree: bool = typer.Option(False, "--tree", "-t"),
     mastery: Optional[str] = typer.Option(None, "--mastery", "-m"),
+    sessions: Optional[str] = typer.Option(
+        None,
+        "--sessions",
+        help="Show persisted session traces for a student.",
+    ),
     counts: bool = typer.Option(False, "--counts", "-c"),
 ):
     """Inspect the workspace state. With no flags, shows a summary."""
     ws, ws_dir = _resolve_workspace(workspace)
 
-    if not any([refs, tree, mastery, counts]):
+    if not any([refs, tree, mastery, sessions, counts]):
         refs = tree = counts = True
 
     if counts:
@@ -489,6 +494,19 @@ def inspect(
             display.mastery_display(mastery_data, ws)
         else:
             display.warn(f"No mastery data for student '{mastery}'")
+    if sessions:
+        from .session import session_trace_rows
+
+        session_refs = ws.list_refs(f"student/{sessions}/session")
+        if session_refs:
+            display.session_ref_table(session_refs)
+            for ref_name, tip_hash in session_refs:
+                display.session_trace_display(
+                    ref_name,
+                    session_trace_rows(ws, tip_hash),
+                )
+        else:
+            display.warn(f"No session refs for student '{sessions}'")
 
 
 # ============================================================================

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import rlm_ws
 from rlm_ws.ingest import parse_markdown, ingest_file, ingest_directory
-from rlm_ws.session import SessionConfig, start_session, end_session, run_turn
+from rlm_ws.session import (
+    SessionConfig,
+    end_session,
+    run_turn,
+    session_trace_rows,
+    start_session,
+)
 from rlm_ws.templates import discover_templates, apply_template
 
 
@@ -520,6 +526,10 @@ def test_session_subcall_command_records_child_call():
         assert state.last_event == update_events[0]
         mastery = dict(ws.student_mastery_map(state.student_model))
         assert abs(mastery[binary_hash] - 0.6) < 1e-9
+        assert (
+            ws.get_ref_hash("student/subcall-test/session/current")
+            == state.last_event
+        )
 
         child_input_roles = {ref.role for ref in child_call.inputs}
         assert "call_context" in child_input_roles
@@ -527,6 +537,19 @@ def test_session_subcall_command_records_child_call():
         assert "retrieval_event" in child_input_roles
 
         end_session(state)
+        session_tip = ws.get_ref_hash("student/subcall-test/session/session-1t")
+        assert session_tip is not None
+        rows = session_trace_rows(ws, session_tip)
+        assert rows[0].kind == "SessionStart"
+        assert rows[-1].kind == "SessionEnd"
+        assert any(
+            row.kind == "ModelCall"
+            and row.depth == 1
+            and row.model == "gpt-5.4-nano"
+            for row in rows
+        )
+        assert any("child_call" in row.output_roles for row in rows)
+        assert any("child_output" in row.input_roles for row in rows)
 
         print("  PASS: test_session_subcall_command_records_child_call")
 

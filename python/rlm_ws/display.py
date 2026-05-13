@@ -52,6 +52,45 @@ def ref_table(refs: list[tuple[str, object]]) -> None:
     console.print(table)
 
 
+def session_ref_table(refs: list[tuple[str, object]]) -> None:
+    """Display session refs as a table."""
+    table = Table(title="Sessions", show_header=True, header_style="bold")
+    table.add_column("Ref", style="green")
+    table.add_column("Tip", style="cyan")
+    for name, h in refs:
+        table.add_row(name, h.short())
+    console.print(table)
+
+
+def session_trace_display(ref_name: str, rows: list[object]) -> None:
+    """Display a compact chronological session trace."""
+    table = Table(title=f"Trace: {ref_name}", show_header=True, header_style="bold")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Event")
+    table.add_column("Hash", style="cyan")
+    table.add_column("Depth", justify="right")
+    table.add_column("Model")
+    table.add_column("Inputs")
+    table.add_column("Outputs")
+    table.add_column("Parents", justify="right")
+
+    for row in rows:
+        depth = "" if row.depth is None else str(row.depth)
+        inputs = ", ".join(row.input_roles)
+        outputs = ", ".join(row.output_roles)
+        table.add_row(
+            str(row.index),
+            row.kind,
+            row.hash.short(),
+            depth,
+            row.model,
+            inputs,
+            outputs,
+            str(row.parent_count),
+        )
+    console.print(table)
+
+
 def object_counts_display(atoms: int, frames: int, events: int) -> None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Type")

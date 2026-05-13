@@ -130,6 +130,20 @@ class ContinuationResult:
     parsed: ParsedModelOutput
 
 
+@dataclass(frozen=True)
+class SessionTraceRow:
+    """Compact display data for a persisted session event."""
+
+    index: int
+    hash: Hash
+    kind: str
+    depth: int | None
+    model: str
+    input_roles: tuple[str, ...]
+    output_roles: tuple[str, ...]
+    parent_count: int
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
@@ -255,6 +269,15 @@ def end_session(state: SessionState) -> None:
         if mastery:
             display.console.print()
             display.mastery_display(mastery, state.ws)
+
+
+def _update_current_session_ref(state: SessionState) -> None:
+    if state.last_event is None:
+        return
+    state.ws.set_ref(
+        f"student/{state.config.student_id}/session/current",
+        state.last_event,
+    )
 
 
 def run_turn(state: SessionState, user_input: str) -> str:
@@ -389,10 +412,56 @@ def run_turn(state: SessionState, user_input: str) -> str:
     )
     terminal_event = continuation.event_hash if continuation else call_event
     state.last_event = mutation_events[-1] if mutation_events else terminal_event
+    _update_current_session_ref(state)
 
     state.messages.append({"role": "assistant", "content": response_text})
 
     return response_text
+
+
+def session_trace_rows(
+    ws: Workspace,
+    session_tip: Hash,
+) -> list[SessionTraceRow]:
+    """Return a chronological summary of session events plus child calls."""
+    events: list[tuple[Hash, Event]] = []
+    visited: set[Hash] = set()
+
+    def collect(event_hash: Hash) -> None:
+        if event_hash in visited:
+            return
+        event = ws.get_event(event_hash)
+        if event is None:
+            return
+        visited.add(event_hash)
+
+        for parent_hash in event.parents:
+            collect(parent_hash)
+
+        events.append((event_hash, event))
+
+        for output_ref in event.outputs:
+            if output_ref.role == "child_call":
+                collect(output_ref.hash)
+
+    collect(session_tip)
+
+    rows = []
+    for index, (event_hash, event) in enumerate(events, start=1):
+        depth = event.trace.call_depth if event.kind == "ModelCall" else None
+        rows.append(
+            SessionTraceRow(
+                index=index,
+                hash=event_hash,
+                kind=event.kind,
+                depth=depth,
+                model=event.trace.model or "",
+                input_roles=tuple(ref.role for ref in event.inputs),
+                output_roles=tuple(ref.role for ref in event.outputs),
+                parent_count=len(event.parents),
+            )
+        )
+    return rows
 
 
 def run_interactive(ws: Workspace, config: SessionConfig) -> None:
