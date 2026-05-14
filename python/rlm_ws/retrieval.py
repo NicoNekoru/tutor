@@ -12,6 +12,9 @@ policies, strategy composition, and pedagogical logic.
 
 from __future__ import annotations
 
+import math
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -74,6 +77,156 @@ class ScoredCandidate:
     score: float  # [0.0, 1.0]
     source_strategy: str  # which strategy produced this candidate
     explanation: str  # why this candidate was selected
+
+
+@dataclass(frozen=True)
+class SparseTextEntry:
+    """A text object represented as a sparse token vector."""
+
+    hash: Hash
+    kind: str
+    vector: dict[str, float]
+    norm: float
+
+
+@dataclass(frozen=True)
+class SparseTextIndex:
+    """Rebuildable local text index used for semantic-style retrieval."""
+
+    entries: tuple[SparseTextEntry, ...]
+
+    @classmethod
+    def from_workspace(
+        cls,
+        ws: Workspace,
+        target_kinds: list[str] | None = None,
+    ) -> "SparseTextIndex":
+        entries: list[SparseTextEntry] = []
+        seen: set[Hash] = set()
+        kinds = set(target_kinds or _TEXT_ATOM_KINDS)
+
+        course_hash = ws.get_ref_hash("course/structure")
+        if course_hash:
+            try:
+                atoms = ws.collect_atoms(course_hash)
+            except Exception:
+                atoms = []
+            for atom_hash, atom in atoms:
+                if atom_hash in seen or atom.kind not in kinds:
+                    continue
+                seen.add(atom_hash)
+                entry = _sparse_text_entry(atom_hash, atom.kind, atom.text)
+                if entry is not None:
+                    entries.append(entry)
+        else:
+            for kind in kinds:
+                try:
+                    hashes = ws.atoms_by_kind(kind)
+                except Exception:
+                    continue
+                for atom_hash in hashes:
+                    if atom_hash in seen:
+                        continue
+                    atom = ws.get_atom(atom_hash)
+                    if atom is None:
+                        continue
+                    seen.add(atom_hash)
+                    entry = _sparse_text_entry(atom_hash, atom.kind, atom.text)
+                    if entry is not None:
+                        entries.append(entry)
+
+        return cls(entries=tuple(entries))
+
+    def search(self, text: str, limit: int) -> list[tuple[SparseTextEntry, float]]:
+        query_vector, query_norm = _sparse_vector(text)
+        if query_norm == 0.0:
+            return []
+
+        scored: list[tuple[SparseTextEntry, float]] = []
+        for entry in self.entries:
+            dot = sum(
+                query_weight * entry.vector.get(token, 0.0)
+                for token, query_weight in query_vector.items()
+            )
+            if dot <= 0.0:
+                continue
+            scored.append((entry, dot / (query_norm * entry.norm)))
+
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:limit]
+
+
+_TEXT_ATOM_KINDS = [
+    "ConceptDefinition",
+    "LessonBody",
+    "ProblemStatement",
+    "WorkedExample",
+    "StudentResponse",
+    "ModelOutput",
+    "Annotation",
+]
+
+_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "can",
+    "does",
+    "for",
+    "from",
+    "how",
+    "into",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "with",
+    "would",
+}
+
+
+def _sparse_text_entry(
+    atom_hash: Hash,
+    kind: str,
+    text: str,
+) -> SparseTextEntry | None:
+    vector, norm = _sparse_vector(text)
+    if norm == 0.0:
+        return None
+    return SparseTextEntry(hash=atom_hash, kind=kind, vector=vector, norm=norm)
+
+
+def _sparse_vector(text: str) -> tuple[dict[str, float], float]:
+    counts = Counter(_tokenize(text))
+    if not counts:
+        return {}, 0.0
+    vector = {token: 1.0 + math.log(count) for token, count in counts.items()}
+    norm = math.sqrt(sum(weight * weight for weight in vector.values()))
+    return vector, norm
+
+
+def _tokenize(text: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(raw) < 3 or raw in _STOPWORDS:
+            continue
+        token = _normalize_token(raw)
+        if len(token) >= 3 and token not in _STOPWORDS:
+            tokens.append(token)
+    return tokens
+
+
+def _normalize_token(token: str) -> str:
+    if token.endswith("ies") and len(token) > 4:
+        return f"{token[:-3]}y"
+    for suffix in ("ing", "ed", "es", "s"):
+        if token.endswith(suffix) and len(token) > len(suffix) + 3:
+            return token[: -len(suffix)]
+    return token
 
 
 # ============================================================================
@@ -206,6 +359,43 @@ class GraphProximity:
                 source_strategy="GraphProximity",
                 explanation=explanation,
             )
+
+
+class SemanticSimilarity:
+    """Score text objects by sparse-vector similarity to ``query.text_query``.
+
+    This is a local, rebuildable index. It gives the retrieval pipeline a
+    semantic-style text path without requiring hosted embeddings or making
+    derived data part of workspace correctness.
+    """
+
+    name = "SemanticSimilarity"
+
+    def __init__(self, min_score: float = 0.08):
+        self.min_score = min_score
+
+    def retrieve(
+        self,
+        query: RetrievalQuery,
+        ws: Workspace,
+    ) -> list[ScoredCandidate]:
+        if not query.text_query:
+            return []
+
+        index = SparseTextIndex.from_workspace(ws, query.target_kinds or None)
+        results: list[ScoredCandidate] = []
+        for entry, score in index.search(query.text_query, query.max_results * 2):
+            if score < self.min_score:
+                continue
+            results.append(
+                ScoredCandidate(
+                    hash=entry.hash,
+                    score=min(1.0, score),
+                    source_strategy=self.name,
+                    explanation=f"text similarity {score:.2f} to query",
+                )
+            )
+        return results
 
 
 class MasteryAware:
@@ -542,6 +732,7 @@ class RetrievalPolicy:
 DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     RetrievalIntent.GENERAL: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.7),
             (GraphProximity(), 0.8),
             (MasteryAware(), 0.5),
             (TemporalRecency(), 0.3),
@@ -549,6 +740,7 @@ DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     ),
     RetrievalIntent.EXPLAIN_CONCEPT: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.8),
             (GraphProximity(), 0.9),
             (PrerequisiteChain(), 0.8),
             (MasteryAware(), 0.6),
@@ -556,12 +748,14 @@ DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     ),
     RetrievalIntent.GENERATE_PROBLEM: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.5),
             (GraphProximity(), 0.7),
             (MasteryAware(), 0.9),
         ]
     ),
     RetrievalIntent.DIAGNOSE_MISCONCEPTION: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.5),
             (InteractionHistory(), 0.9),
             (MasteryAware(), 0.8),
             (GraphProximity(), 0.5),
@@ -569,6 +763,7 @@ DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     ),
     RetrievalIntent.ASSESS_MASTERY: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.4),
             (MasteryAware(), 0.9),
             (InteractionHistory(), 0.7),
             (GraphProximity(), 0.4),
@@ -576,6 +771,7 @@ DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     ),
     RetrievalIntent.PLAN_LESSON: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.6),
             (GraphProximity(), 0.8),
             (PrerequisiteChain(), 0.9),
             (MasteryAware(), 0.7),
@@ -584,6 +780,7 @@ DEFAULT_POLICIES: dict[RetrievalIntent, RetrievalPolicy] = {
     ),
     RetrievalIntent.REVIEW_SESSION_HISTORY: RetrievalPolicy(
         strategies=[
+            (SemanticSimilarity(), 0.3),
             (TemporalRecency(), 0.9),
             (InteractionHistory(), 0.8),
             (MasteryAware(), 0.4),

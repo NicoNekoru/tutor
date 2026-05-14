@@ -13,6 +13,7 @@ from rlm_ws.retrieval import (
     ScoredCandidate,
     RetrievalPolicy,
     GraphProximity,
+    SemanticSimilarity,
     MasteryAware,
     TemporalRecency,
     PrerequisiteChain,
@@ -222,6 +223,30 @@ def test_graph_proximity():
         assert data["concepts"]["linked"] not in hashes
 
         print("  PASS: test_graph_proximity")
+
+
+def test_semantic_similarity_text_query():
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        data = build_course(ws)
+
+        query = RetrievalQuery(
+            text_query="explain binary search halves the search space",
+            max_results=5,
+        )
+
+        strategy = SemanticSimilarity()
+        results = strategy.retrieve(query, ws)
+        hashes = {c.hash for c in results}
+
+        assert data["concepts"]["binary"] in hashes
+        assert all(c.source_strategy == "SemanticSimilarity" for c in results)
+
+        default_results = retrieve(query, ws)
+        default_hashes = {c.hash for c in default_results}
+        assert data["concepts"]["binary"] in default_hashes
+
+        print("  PASS: test_semantic_similarity_text_query")
 
 
 def test_mastery_aware():
@@ -615,6 +640,7 @@ def test_scored_candidate_fields():
 if __name__ == "__main__":
     print("Running retrieval system tests...")
     test_graph_proximity()
+    test_semantic_similarity_text_query()
     test_mastery_aware()
     test_mastery_update_changes_future_retrieval()
     test_mastery_aware_no_model()
@@ -630,4 +656,4 @@ if __name__ == "__main__":
     test_failing_strategy_doesnt_crash()
     test_empty_query()
     test_scored_candidate_fields()
-    print("\nAll 16 tests passed!")
+    print("\nAll 17 tests passed!")

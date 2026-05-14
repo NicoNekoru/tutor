@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 44 Python tests
+pytest -v                    # 45 Python tests
 ```
 
 ### CLI quickstart
@@ -167,6 +167,8 @@ The durable workspace remains the source of truth. API-side conversation state, 
 
 For future orchestration work, prefer typed tool/function calls or strict JSON command outputs. Use the Agents SDK when the application wants an SDK-owned agent loop with tools, approvals, handoffs, streaming, and traces. Use Skills as packaged model/tool instructions at the edge; they are not core object-store primitives.
 
+Retrieval includes graph proximity, mastery-aware ranking, temporal history, prerequisite traversal, interaction history, and a rebuildable local sparse text index for semantic-style query matching. Hosted embeddings remain optional derived state, not a correctness dependency.
+
 The session loop currently persists retrieval provenance, first-class `CallContext` frames, typed `mastery_update` commands, bounded `subcall` child `ModelCall` events, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
@@ -236,7 +238,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 44 tests across 3 test files
+pytest -v                    # 45 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -274,7 +276,7 @@ python/rlm_ws/                  ← Python porcelain layer
 tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
-├── test_retrieval.py           ← retrieval system tests (16 tests)
+├── test_retrieval.py           ← retrieval system tests (17 tests)
 └── test_cli.py                 ← templates, ingestion, and session tests (16 tests)
 ```
 
