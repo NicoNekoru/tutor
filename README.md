@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 49 Python tests
+pytest -v                    # 51 Python tests
 ```
 
 ### CLI quickstart
@@ -37,7 +37,7 @@ rlm-ws auth
 # Start a tutoring session
 rlm-ws session --student alice
 
-# In-session commands: /mastery, /model, /tree, /status, /quit
+# In-session commands: /mastery, /model, /judge, /tree, /status, /quit
 
 # Other commands
 rlm-ws ingest content/extra-topics.md   # add more course materials
@@ -165,11 +165,13 @@ OpenAI is the default direct provider. `rlm-ws session` uses `gpt-5.4-mini` thro
 
 The durable workspace remains the source of truth. API-side conversation state, hosted agent traces, and model memory are useful runtime conveniences, but they should not replace Events, Refs, and StudentModel frames unless mirrored back into the object store.
 
+Sessions with an API key use model-judged mastery by default; offline sessions and `rlm-ws session --mastery-judge heuristic` use the local heuristic updater. The in-session `/judge` command switches modes for subsequent turns.
+
 For future orchestration work, prefer typed tool/function calls or strict JSON command outputs. Use the Agents SDK when the application wants an SDK-owned agent loop with tools, approvals, handoffs, streaming, and traces. Use Skills as packaged model/tool instructions at the edge; they are not core object-store primitives.
 
 Retrieval includes graph proximity, mastery-aware ranking, temporal history, prerequisite traversal, interaction history, a rebuildable local sparse text index for semantic-style query matching, and an optional derived embedding-index interface. Hosted embeddings remain optional derived state, not a correctness dependency.
 
-The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, validated typed engine commands, conservative derived mastery updates, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
+The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, validated typed engine commands, model-judged mastery updates with bounded deltas and heuristic fallback, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls, mastery-judgment calls, and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
 
@@ -238,7 +240,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 49 tests across 3 test files
+pytest -v                    # 51 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -277,7 +279,7 @@ tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (19 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (18 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (20 tests)
 ```
 
 ### Lint policy

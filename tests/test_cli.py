@@ -763,6 +763,152 @@ def test_command_validation_records_engine_notice():
         print("  PASS: test_command_validation_records_engine_notice")
 
 
+def test_model_judged_mastery_update_records_judgment_call():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        course_hash = ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+        binary_hash = next(
+            concept_hash
+            for concept_hash, atom in ws.collect_atoms(
+                course_hash,
+                "ConceptDefinition",
+            )
+            if "Binary search" in atom.text
+        )
+
+        state = start_session(
+            ws,
+            SessionConfig(student_id="judge-test", api_key="sk-test"),
+        )
+
+        calls = []
+        old_call_model = session_mod._call_model
+
+        def fake_call_model(fake_state, system):
+            calls.append((fake_state.config.model, system, list(fake_state.messages)))
+            if "Mastery Judgment Protocol" in system:
+                payload = json.loads(fake_state.messages[0]["content"])
+                assert payload["candidate_concepts"][0]["concept"] == (
+                    binary_hash.to_hex()
+                )
+                return json.dumps(
+                    {
+                        "judgments": [
+                            {
+                                "concept": binary_hash.to_hex(),
+                                "level": 0.9,
+                                "confidence": 0.92,
+                                "evidence": "student explained the halving invariant",
+                                "reason": "student connected interval halving to search",
+                            }
+                        ]
+                    }
+                )
+            return "Binary search halves the remaining interval."
+
+        try:
+            session_mod._call_model = fake_call_model
+            response = run_turn(
+                state,
+                "I can explain why binary search halves the interval.",
+            )
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "Binary search halves the remaining interval."
+        assert len(calls) == 2
+        assert calls[1][0] == "gpt-5.4-nano"
+
+        mastery = dict(ws.student_mastery_map(state.student_model))
+        assert abs(mastery[binary_hash] - 0.08) < 1e-9
+
+        judgment_calls = [
+            (event_hash, ws.get_event(event_hash))
+            for event_hash in ws.events_by_kind("ModelCall")
+            if "mastery-judgment" in ws.get_event(event_hash).tags
+        ]
+        assert len(judgment_calls) == 1
+        judgment_hash, judgment_call = judgment_calls[0]
+        assert judgment_call.trace.model == "gpt-5.4-nano"
+        assert any(ref.role == "turn_evidence" for ref in judgment_call.inputs)
+        output_atom = ws.get_atom(judgment_call.outputs[0].hash)
+        assert output_atom.structured["usable"] is True
+        assert output_atom.structured["accepted_commands"][0]["arguments"][
+            "source"
+        ] == "model_judgment"
+
+        update_event = ws.get_event(ws.events_by_kind("StudentModelUpdate")[0])
+        assert update_event.parents == [judgment_hash]
+
+        end_session(state)
+
+        print("  PASS: test_model_judged_mastery_update_records_judgment_call")
+
+
+def test_invalid_model_judgment_falls_back_to_heuristic():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        course_hash = ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+        binary_hash = next(
+            concept_hash
+            for concept_hash, atom in ws.collect_atoms(
+                course_hash,
+                "ConceptDefinition",
+            )
+            if "Binary search" in atom.text
+        )
+
+        state = start_session(
+            ws,
+            SessionConfig(student_id="fallback-test", api_key="sk-test"),
+        )
+
+        old_call_model = session_mod._call_model
+
+        def fake_call_model(_fake_state, system):
+            if "Mastery Judgment Protocol" in system:
+                return "not json"
+            return "Good progress."
+
+        try:
+            session_mod._call_model = fake_call_model
+            response = run_turn(state, "I understand binary search now.")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "Good progress."
+        mastery = dict(ws.student_mastery_map(state.student_model))
+        assert mastery[binary_hash] > 0.0
+
+        judgment_call = next(
+            ws.get_event(event_hash)
+            for event_hash in ws.events_by_kind("ModelCall")
+            if "mastery-judgment" in ws.get_event(event_hash).tags
+        )
+        output_atom = ws.get_atom(judgment_call.outputs[0].hash)
+        assert output_atom.structured["usable"] is False
+        assert output_atom.structured["fallback"] is True
+        assert "strict JSON" in output_atom.structured["errors"][0]
+
+        model = ws.get_frame(state.student_model)
+        assert any(
+            edge.label == "InteractionRecord"
+            and edge.annotation
+            and edge.annotation.get("source") == "turn_evidence"
+            for edge in model.edges
+        )
+
+        end_session(state)
+
+        print("  PASS: test_invalid_model_judgment_falls_back_to_heuristic")
+
+
 def test_provider_adapters_shape_http_requests():
     import rlm_ws.providers as providers
     from rlm_ws.providers import ModelRequest, adapter_for
@@ -865,7 +1011,9 @@ def test_session_model_command_helpers():
         EngineCommand,
         SessionState,
         _provider_models,
+        _resolve_mastery_judgment_mode,
         _resolve_model_selection,
+        _set_mastery_judgment_mode,
         _set_session_model,
         _subcall_model,
     )
@@ -898,6 +1046,13 @@ def test_session_model_command_helpers():
             == "anthropic/claude-sonnet-4"
         )
 
+        assert _resolve_mastery_judgment_mode("model-judged") == "model"
+        assert _resolve_mastery_judgment_mode("rules") == "heuristic"
+        assert _resolve_mastery_judgment_mode("unknown") is None
+
+        _set_mastery_judgment_mode(state, "heuristic")
+        assert state.config.mastery_judgment == "heuristic"
+
     print("  PASS: test_session_model_command_helpers")
 
 
@@ -919,6 +1074,8 @@ if __name__ == "__main__":
     test_session_subcall_budget_records_engine_notice()
     test_responses_text_extraction()
     test_command_validation_records_engine_notice()
+    test_model_judged_mastery_update_records_judgment_call()
+    test_invalid_model_judgment_falls_back_to_heuristic()
     test_provider_adapters_shape_http_requests()
     test_session_model_command_helpers()
-    print("\nAll 18 tests passed!")
+    print("\nAll 20 tests passed!")

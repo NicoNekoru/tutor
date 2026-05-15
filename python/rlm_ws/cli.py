@@ -400,6 +400,11 @@ def session(
         "-p",
         help="Provider from auth config: openai, openrouter",
     ),
+    mastery_judge: str = typer.Option(
+        "model",
+        "--mastery-judge",
+        help="Mastery update mode when the tutor emits no explicit update: model or heuristic.",
+    ),
 ):
     """Start an interactive tutoring session.
 
@@ -407,6 +412,7 @@ def session(
     In-session commands:
       /mastery  — show current mastery levels
       /model    — show or change the current model
+      /judge    — show or change mastery judgment mode
       /tree     — show course structure
       /status   — show workspace statistics
       /quit     — end session
@@ -437,6 +443,7 @@ def session(
         model=model or resolved_model,
         api_key=api_key or resolved_key,
         api_base=api_base or resolved_base,
+        mastery_judgment=mastery_judge,
         ws_dir=ws_dir,
     )
 

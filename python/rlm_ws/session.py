@@ -55,6 +55,7 @@ class SessionConfig:
     max_context_results: int = 10
     max_call_depth: int = 1
     max_subcalls_per_turn: int = 3
+    mastery_judgment: str = "model"
     system_prompt: str = ""
     ws_dir: Path | None = None  # set by CLI; used to load workspace.toml
 
@@ -104,6 +105,17 @@ class TurnEvidenceRecord:
     concept_scores: dict[Hash, float]
     signal: str
     base_delta: float
+
+
+@dataclass(frozen=True)
+class MasteryJudgmentResult:
+    """Result of an optional model-judged mastery pass."""
+
+    commands: list[EngineCommand] = field(default_factory=list)
+    event_hash: Hash | None = None
+    output_hash: Hash | None = None
+    attempted: bool = False
+    usable: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,8 +234,49 @@ If you need a command, include a final JSON block like:
 """
 
 
+MASTERY_JUDGMENT_PROTOCOL = """\
+## Mastery Judgment Protocol
+
+You are judging student mastery after one tutoring turn. Use the course-specific
+context, the student's message, the tutor response, and current mastery values.
+Return only strict JSON with this shape:
+
+{
+  "judgments": [
+    {
+      "concept": "<candidate concept hash>",
+      "level": 0.0,
+      "confidence": 0.0,
+      "evidence": "short behavioral evidence from this turn",
+      "reason": "short reason for the estimate"
+    }
+  ]
+}
+
+Rules:
+- Judge only concepts listed in candidate_concepts.
+- Use level as the absolute mastery estimate after this turn.
+- Prefer an empty judgments list when evidence is weak.
+- Do not infer strong mastery from the student merely asking for an explanation.
+- Keep evidence and reason concise.
+"""
+
+MASTERY_JUDGMENT_MODES = {"heuristic", "model"}
+MIN_MASTERY_JUDGMENT_CONFIDENCE = 0.35
+MAX_MASTERY_JUDGMENT_INCREASE = 0.08
+MAX_MASTERY_JUDGMENT_DECREASE = 0.10
+
+
 def start_session(ws: Workspace, config: SessionConfig) -> SessionState:
     """Start a new tutoring session."""
+    judgment_mode = _resolve_mastery_judgment_mode(config.mastery_judgment)
+    if judgment_mode is None:
+        display.warn(
+            f"Unknown mastery judgment mode '{config.mastery_judgment}', using model"
+        )
+        judgment_mode = "model"
+    config.mastery_judgment = judgment_mode
+
     # Load system prompt from workspace.toml if not explicitly provided.
     if not config.system_prompt and config.ws_dir:
         from .templates import load_workspace_config
@@ -493,7 +546,23 @@ def run_turn(state: SessionState, user_input: str) -> str:
     )
     current_parent = mutation_events[-1] if mutation_events else turn_evidence.event_hash
     if not _has_mastery_update(commands_to_apply):
-        derived_commands = _derive_mastery_updates(state, turn_evidence)
+        judgment = _judge_mastery_updates(
+            state,
+            evidence=turn_evidence,
+            parent_event=current_parent,
+            model_output=terminal_output,
+            user_input=user_input,
+            response_text=response_text,
+            retrieval=retrieval,
+        )
+        if judgment.event_hash:
+            current_parent = judgment.event_hash
+
+        derived_commands = (
+            judgment.commands
+            if judgment.usable
+            else _derive_mastery_updates(state, turn_evidence)
+        )
         derived_events = _apply_engine_commands(
             state,
             derived_commands,
@@ -562,6 +631,7 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "show available commands"),
     ("/mastery", "show current mastery levels"),
     ("/model", "show or change the current model"),
+    ("/judge", "show or change mastery judgment mode"),
     ("/tree", "show course structure"),
     ("/status", "session and workspace stats"),
     ("/quit", "end the session (or press ^D)"),
@@ -623,6 +693,10 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                 _handle_model_command(state, stripped)
                 continue
 
+            if cmd == "/judge" or cmd.startswith("/judge "):
+                _handle_judge_command(state, stripped)
+                continue
+
             if cmd == "/tree":
                 course_hash = ws.get_ref_hash("course/structure")
                 if course_hash:
@@ -638,6 +712,7 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                 display.info(f"student   {config.student_id}")
                 display.info(f"provider  {config.provider}")
                 display.info(f"model     {config.model}")
+                display.info(f"judge     {config.mastery_judgment}")
                 continue
 
             if cmd.startswith("/"):
@@ -683,6 +758,21 @@ def _handle_model_command(state: SessionState, raw_command: str) -> None:
     _set_session_model(state, selected)
 
 
+def _handle_judge_command(state: SessionState, raw_command: str) -> None:
+    argument = _slash_argument(raw_command)
+    if argument is None:
+        display.info(f"mastery judge {state.config.mastery_judgment}")
+        display.hint("use /judge model or /judge heuristic")
+        return
+
+    selected = _resolve_mastery_judgment_mode(argument)
+    if selected is None:
+        display.warn(f"Unknown mastery judgment mode: {argument}")
+        display.hint("available modes: model, heuristic")
+        return
+    _set_mastery_judgment_mode(state, selected)
+
+
 def _slash_argument(raw_command: str) -> str | None:
     parts = raw_command.strip().split(maxsplit=1)
     if len(parts) < 2:
@@ -725,6 +815,39 @@ def _set_session_model(state: SessionState, model: str) -> None:
     state.config.model = selected
     display.success(f"Model set to {selected}")
     display.hint(f"was {previous}; applies to subsequent model calls")
+
+
+def _resolve_mastery_judgment_mode(value: str) -> str | None:
+    mode = value.strip().lower().replace("_", "-")
+    aliases = {
+        "h": "heuristic",
+        "heuristics": "heuristic",
+        "rule": "heuristic",
+        "rules": "heuristic",
+        "m": "model",
+        "judge": "model",
+        "model-judged": "model",
+        "model-judgement": "model",
+        "model-judgment": "model",
+    }
+    mode = aliases.get(mode, mode)
+    if mode in MASTERY_JUDGMENT_MODES:
+        return mode
+    return None
+
+
+def _set_mastery_judgment_mode(state: SessionState, mode: str) -> None:
+    selected = _resolve_mastery_judgment_mode(mode)
+    if selected is None:
+        display.warn(f"Unknown mastery judgment mode: {mode}")
+        return
+    previous = state.config.mastery_judgment
+    if selected == previous:
+        display.info("mastery judge unchanged")
+        return
+    state.config.mastery_judgment = selected
+    display.success(f"Mastery judge set to {selected}")
+    display.hint(f"was {previous}; applies to subsequent turns")
 
 
 # ============================================================================
@@ -1803,6 +1926,391 @@ def _child_results_prompt(
         "Child outputs:\n"
         + "\n\n".join(child_sections)
     )
+
+
+def _judge_mastery_updates(
+    state: SessionState,
+    evidence: TurnEvidenceRecord,
+    parent_event: Hash,
+    model_output: Hash,
+    user_input: str,
+    response_text: str,
+    retrieval: RetrievalRecord,
+) -> MasteryJudgmentResult:
+    """Ask a bounded model judge for mastery updates when configured."""
+    mode = _resolve_mastery_judgment_mode(state.config.mastery_judgment) or "model"
+    state.config.mastery_judgment = mode
+    if mode == "heuristic":
+        return MasteryJudgmentResult()
+    if state.student_model is None or not state.config.api_key:
+        return MasteryJudgmentResult()
+
+    candidates = _mastery_judgment_candidates(state, evidence)
+    if not candidates:
+        return MasteryJudgmentResult()
+
+    prompt_payload = _mastery_judgment_prompt_payload(
+        state,
+        evidence=evidence,
+        candidates=candidates,
+        user_input=user_input,
+        response_text=response_text,
+        retrieval=retrieval,
+    )
+    judge_model = _mastery_judge_model(state)
+    judge_state = SessionState(
+        ws=state.ws,
+        config=replace(state.config, model=judge_model),
+        session_event=state.session_event,
+        last_event=parent_event,
+        student_model=state.student_model,
+        messages=[
+            {
+                "role": "user",
+                "content": json.dumps(prompt_payload, indent=2, sort_keys=True),
+            }
+        ],
+        turn_count=state.turn_count,
+    )
+
+    t0 = time.monotonic()
+    try:
+        raw_response = _call_model(judge_state, MASTERY_JUDGMENT_PROTOCOL)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        display.warn(f"Mastery judgment skipped: {exc}")
+        return _write_mastery_judgment_call(
+            state,
+            parent_event=parent_event,
+            turn_evidence=evidence.atom_hash,
+            model_output=model_output,
+            judge_model=judge_model,
+            latency_ms=latency_ms,
+            prompt_payload=prompt_payload,
+            raw_output="",
+            normalized_judgments=[],
+            accepted_commands=[],
+            errors=[f"model call failed: {exc}"],
+            usable=False,
+        )
+
+    raw_output, judgments, parse_errors = _parse_mastery_judgment_payload(raw_response)
+    normalized_judgments: list[dict[str, Any]] = []
+    commands: list[EngineCommand] = []
+    validation_errors: list[str] = []
+    if judgments is not None:
+        commands, normalized_judgments, validation_errors = (
+            _mastery_judgment_commands(state, candidates, judgments)
+        )
+
+    errors = parse_errors + validation_errors
+    usable = judgments is not None and (not validation_errors or bool(commands))
+    return _write_mastery_judgment_call(
+        state,
+        parent_event=parent_event,
+        turn_evidence=evidence.atom_hash,
+        model_output=model_output,
+        judge_model=judge_model,
+        latency_ms=latency_ms,
+        prompt_payload=prompt_payload,
+        raw_output=raw_output,
+        normalized_judgments=normalized_judgments,
+        accepted_commands=commands,
+        errors=errors,
+        usable=usable,
+    )
+
+
+def _mastery_judgment_candidates(
+    state: SessionState,
+    evidence: TurnEvidenceRecord,
+) -> list[dict[str, Any]]:
+    mastery = dict(state.ws.student_mastery_map(state.student_model))
+    candidates: list[dict[str, Any]] = []
+    for concept_hash, score in sorted(
+        evidence.concept_scores.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:5]:
+        atom = state.ws.get_atom(concept_hash)
+        candidates.append(
+            {
+                "concept": concept_hash.to_hex(),
+                "name": _bounded_text(atom.text if atom else concept_hash.short(), 240),
+                "current_mastery": mastery.get(concept_hash, 0.0),
+                "evidence_score": score,
+            }
+        )
+    return candidates
+
+
+def _mastery_judgment_prompt_payload(
+    state: SessionState,
+    evidence: TurnEvidenceRecord,
+    candidates: list[dict[str, Any]],
+    user_input: str,
+    response_text: str,
+    retrieval: RetrievalRecord,
+) -> dict[str, Any]:
+    return {
+        "prompt_version": "mastery-judgment-v1",
+        "student_id": state.config.student_id,
+        "turn": state.turn_count,
+        "turn_signal": evidence.signal,
+        "base_delta": evidence.base_delta,
+        "candidate_concepts": candidates,
+        "student_message": user_input,
+        "tutor_response": response_text,
+        "course_context": _bounded_text(retrieval.context_text, 6000),
+        "system_prompt": _bounded_text(state.config.system_prompt, 2000),
+    }
+
+
+def _parse_mastery_judgment_payload(
+    raw_response: str | dict[str, Any],
+) -> tuple[str, list[Any] | None, list[str]]:
+    raw_output = (
+        _extract_responses_text(raw_response)
+        if isinstance(raw_response, dict)
+        else str(raw_response)
+    )
+    parsed = _extract_json_command_payload(raw_output)
+    if parsed is None:
+        return raw_output, None, ["mastery judgment must be strict JSON"]
+
+    payload = parsed[0]
+    if isinstance(payload, dict):
+        judgments = payload.get("judgments")
+        if not isinstance(judgments, list):
+            return raw_output, None, ["mastery judgment JSON requires judgments list"]
+        return raw_output, judgments, []
+    if isinstance(payload, list):
+        return raw_output, payload, []
+    return raw_output, None, ["mastery judgment JSON must be an object or list"]
+
+
+def _mastery_judgment_commands(
+    state: SessionState,
+    candidates: list[dict[str, Any]],
+    judgments: list[Any],
+) -> tuple[list[EngineCommand], list[dict[str, Any]], list[str]]:
+    candidate_by_hex = {candidate["concept"]: candidate for candidate in candidates}
+    commands: list[EngineCommand] = []
+    normalized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    for index, item in enumerate(judgments):
+        record: dict[str, Any] = {
+            "index": index,
+            "accepted": False,
+        }
+        if not isinstance(item, dict):
+            record["error"] = "judgment item must be an object"
+            normalized.append(record)
+            errors.append(f"judgment {index}: item must be an object")
+            continue
+
+        concept_raw = item.get("concept") or item.get("concept_hash")
+        level = _coerce_judgment_number(item.get("level"))
+        confidence = _coerce_judgment_number(item.get("confidence"))
+        evidence_text = _bounded_text(str(item.get("evidence") or "").strip(), 240)
+        reason_text = _bounded_text(str(item.get("reason") or "").strip(), 240)
+
+        record.update(
+            {
+                "concept": concept_raw,
+                "level": level,
+                "confidence": confidence,
+                "evidence": evidence_text,
+                "reason": reason_text,
+            }
+        )
+
+        if not isinstance(concept_raw, str):
+            record["error"] = "concept must be a hash string"
+            normalized.append(record)
+            errors.append(f"judgment {index}: concept must be a hash string")
+            continue
+        try:
+            concept_hash = Hash.from_hex(concept_raw)
+        except Exception:
+            record["error"] = "concept is not a valid hash"
+            normalized.append(record)
+            errors.append(f"judgment {index}: concept is not a valid hash")
+            continue
+        concept_hex = concept_hash.to_hex()
+        if concept_hex not in candidate_by_hex:
+            record["error"] = "concept was not in candidate_concepts"
+            normalized.append(record)
+            errors.append(f"judgment {index}: concept was not in candidate_concepts")
+            continue
+        if concept_hex in seen:
+            record["error"] = "duplicate concept judgment"
+            normalized.append(record)
+            errors.append(f"judgment {index}: duplicate concept judgment")
+            continue
+        seen.add(concept_hex)
+
+        if level is None:
+            record["error"] = "level must be numeric"
+            normalized.append(record)
+            errors.append(f"judgment {index}: level must be numeric")
+            continue
+        if confidence is None:
+            record["error"] = "confidence must be numeric"
+            normalized.append(record)
+            errors.append(f"judgment {index}: confidence must be numeric")
+            continue
+
+        target_level = max(0.0, min(1.0, level))
+        confidence = max(0.0, min(1.0, confidence))
+        current_level = float(candidate_by_hex[concept_hex]["current_mastery"])
+        bounded_level = _bounded_judged_mastery_level(current_level, target_level)
+        delta = bounded_level - current_level
+
+        record.update(
+            {
+                "concept": concept_hex,
+                "level": target_level,
+                "confidence": confidence,
+                "current_mastery": current_level,
+                "bounded_level": bounded_level,
+                "delta": delta,
+            }
+        )
+
+        if confidence < MIN_MASTERY_JUDGMENT_CONFIDENCE:
+            record["skip_reason"] = "confidence below threshold"
+            normalized.append(record)
+            continue
+        if abs(delta) < 0.005:
+            record["skip_reason"] = "bounded delta too small"
+            normalized.append(record)
+            continue
+
+        reason = reason_text or evidence_text or "model-judged turn evidence"
+        commands.append(
+            EngineCommand(
+                kind="mastery_update",
+                arguments={
+                    "concept": concept_hex,
+                    "level": bounded_level,
+                    "reason": (
+                        f"model-judged mastery: {reason} "
+                        f"(confidence={confidence:.2f}, delta={delta:+.3f})"
+                    ),
+                    "source": "model_judgment",
+                    "confidence": confidence,
+                    "judged_level": target_level,
+                },
+            )
+        )
+        record["accepted"] = True
+        normalized.append(record)
+
+    return commands, normalized, errors
+
+
+def _write_mastery_judgment_call(
+    state: SessionState,
+    parent_event: Hash,
+    turn_evidence: Hash,
+    model_output: Hash,
+    judge_model: str,
+    latency_ms: int,
+    prompt_payload: dict[str, Any],
+    raw_output: str,
+    normalized_judgments: list[dict[str, Any]],
+    accepted_commands: list[EngineCommand],
+    errors: list[str],
+    usable: bool,
+) -> MasteryJudgmentResult:
+    output_hash = state.ws.put_atom(
+        Atom(
+            "ModelOutput",
+            f"mastery judgment for turn {state.turn_count}",
+            tags=["model-output", "mastery-judgment"],
+            structured={
+                "prompt_version": "mastery-judgment-v1",
+                "mode": "model",
+                "provider": state.config.provider,
+                "model": judge_model,
+                "turn": state.turn_count,
+                "attempted": True,
+                "usable": usable,
+                "fallback": not usable,
+                "input": prompt_payload,
+                "raw_output": raw_output,
+                "judgments": normalized_judgments,
+                "accepted_commands": [
+                    _command_to_dict(command) for command in accepted_commands
+                ],
+                "errors": errors,
+            },
+        )
+    )
+
+    inputs = [
+        EventRef(turn_evidence, "turn_evidence"),
+        EventRef(model_output, "model_output"),
+    ]
+    if state.student_model:
+        inputs.append(EventRef(state.student_model, "student_model"))
+
+    event_hash = state.ws.put_event(
+        Event(
+            "ModelCall",
+            parents=[parent_event],
+            inputs=inputs,
+            outputs=[EventRef(output_hash, "mastery_judgment")],
+            tags=["mastery-judgment"],
+            trace=CallTrace(
+                call_depth=1,
+                model=judge_model,
+                latency_ms=latency_ms,
+            ),
+        )
+    )
+
+    return MasteryJudgmentResult(
+        commands=accepted_commands,
+        event_hash=event_hash,
+        output_hash=output_hash,
+        attempted=True,
+        usable=usable,
+    )
+
+
+def _mastery_judge_model(state: SessionState) -> str:
+    judge_defaults = {
+        "gpt-5.4-mini": "gpt-5.4-nano",
+        "openai/gpt-5.4-mini": "openai/gpt-5.4-nano",
+    }
+    return judge_defaults.get(state.config.model, state.config.model)
+
+
+def _bounded_judged_mastery_level(current_level: float, judged_level: float) -> float:
+    delta = judged_level - current_level
+    if delta > 0:
+        delta = min(delta, MAX_MASTERY_JUDGMENT_INCREASE)
+    else:
+        delta = max(delta, -MAX_MASTERY_JUDGMENT_DECREASE)
+    return max(0.0, min(1.0, current_level + delta))
+
+
+def _coerce_judgment_number(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bounded_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
 
 
 def _apply_engine_commands(
