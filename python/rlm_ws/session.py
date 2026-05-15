@@ -307,6 +307,8 @@ MASTERY_JUDGMENT_MODES = {"heuristic", "model"}
 MIN_MASTERY_JUDGMENT_CONFIDENCE = 0.35
 MAX_MASTERY_JUDGMENT_INCREASE = 0.08
 MAX_MASTERY_JUDGMENT_DECREASE = 0.10
+RECENT_MEMORY_LIMIT = 12
+RECENT_MEMORY_CONTEXT_LIMIT = 5
 
 
 def start_session(ws: Workspace, config: SessionConfig) -> SessionState:
@@ -616,12 +618,112 @@ def run_turn(state: SessionState, user_input: str) -> str:
         if derived_events:
             current_parent = derived_events[-1]
 
+    recent_memory_event = _write_recent_memory_turn(
+        state,
+        parent_event=current_parent,
+        input_atom=input_atom,
+        model_output=terminal_output,
+        turn_evidence=turn_evidence.atom_hash,
+        user_input=user_input,
+        response_text=response_text,
+    )
+    if recent_memory_event:
+        current_parent = recent_memory_event
+
     state.last_event = current_parent
     _update_current_session_ref(state)
 
     state.messages.append({"role": "assistant", "content": response_text})
 
     return response_text
+
+
+def _write_recent_memory_turn(
+    state: SessionState,
+    parent_event: Hash,
+    input_atom: Hash,
+    model_output: Hash,
+    turn_evidence: Hash,
+    user_input: str,
+    response_text: str,
+) -> Hash | None:
+    """Persist a lightweight recent-memory turn outside the StudentModel."""
+    memory_text = "\n\n".join(
+        [
+            f"Student:\n{user_input}",
+            f"Tutor:\n{response_text}",
+        ]
+    )
+    memory_atom = state.ws.put_atom(
+        Atom(
+            "Config",
+            memory_text,
+            tags=["recent-memory"],
+            structured={
+                "student_id": state.config.student_id,
+                "turn": state.turn_count,
+                "student_message": input_atom.to_hex(),
+                "model_output": model_output.to_hex(),
+                "turn_evidence": turn_evidence.to_hex(),
+                "student_preview": _bounded_text(user_input, 240),
+                "tutor_preview": _bounded_text(response_text, 360),
+            },
+        )
+    )
+    memory_event = state.ws.put_event(
+        Event(
+            "Admin",
+            parents=[parent_event],
+            inputs=[
+                EventRef(input_atom, "student_message"),
+                EventRef(model_output, "model_output"),
+                EventRef(turn_evidence, "turn_evidence"),
+            ],
+            outputs=[EventRef(memory_atom, "recent_memory")],
+            tags=["recent-memory"],
+        )
+    )
+    _update_recent_memory_ref(state, memory_event, memory_atom)
+    return memory_event
+
+
+def _update_recent_memory_ref(
+    state: SessionState,
+    memory_event: Hash,
+    memory_atom: Hash,
+) -> None:
+    ref_name = _recent_memory_ref(state.config.student_id)
+    prior_hash = state.ws.get_ref_hash(ref_name)
+    prior_frame = state.ws.get_frame(prior_hash) if prior_hash else None
+    edges = []
+    if prior_frame is not None:
+        edges.extend(edge for edge in prior_frame.edges if edge.label == "Contains")
+    edges.append(
+        Edge(
+            "Contains",
+            memory_event,
+            weight=float(state.turn_count),
+            annotation={
+                "role": "recent_turn",
+                "turn": state.turn_count,
+                "memory": memory_atom.to_hex(),
+            },
+        )
+    )
+    edges = edges[-RECENT_MEMORY_LIMIT:]
+    frame_hash = state.ws.put_frame(
+        Frame(
+            "SessionSnapshot",
+            edges,
+            tags=["recent-memory"],
+            label=f"{state.config.student_id} recent memory",
+        )
+    )
+    state.ws.set_ref(ref_name, frame_hash)
+
+
+def _recent_memory_ref(student_id: str) -> str:
+    return f"student/{student_id}/memory/recent"
 
 
 def session_trace_rows(
@@ -1066,6 +1168,7 @@ def _concept_name(ws: Workspace, concept_hash: Hash | None) -> str:
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "show available commands"),
     ("/mastery", "show current mastery levels"),
+    ("/provider", "show or switch the active provider"),
     ("/model", "show or change the current model"),
     ("/judge", "show or change mastery judgment mode"),
     ("/tree", "show course structure"),
@@ -1125,6 +1228,10 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.warn("No student model loaded")
                 continue
 
+            if cmd == "/provider" or cmd.startswith("/provider "):
+                _handle_provider_command(state, stripped)
+                continue
+
             if cmd == "/model" or cmd.startswith("/model "):
                 _handle_model_command(state, stripped)
                 continue
@@ -1146,7 +1253,10 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                 display.object_counts_display(atoms, frames, events)
                 display.info(f"turn      {state.turn_count}")
                 display.info(f"student   {config.student_id}")
-                display.info(f"provider  {config.provider}")
+                display.info(
+                    f"provider  {config.provider} "
+                    f"({_provider_status_tag(config.provider)})"
+                )
                 display.info(f"model     {config.model}")
                 display.info(f"judge     {config.mastery_judgment}")
                 continue
@@ -1165,6 +1275,131 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
 
     finally:
         end_session(state)
+
+
+def _provider_status_tag(provider: str) -> str:
+    """Short, human-readable status tag for a provider."""
+    from .auth import resolve_api_config
+
+    resolved = resolve_api_config(provider)
+    if not resolved.api_key:
+        return "offline"
+    if resolved.source == "codex.api_key":
+        return "codex key"
+    if resolved.source == "codex.chatgpt":
+        return "chatgpt"
+    if resolved.source == "env":
+        return "env"
+    if resolved.source == "auth.toml":
+        return "saved"
+    return "ready"
+
+
+def _provider_options() -> list[tuple[str, str, str]]:
+    """All registered providers as (id, display_name, status)."""
+    from .auth import PROVIDERS
+
+    options: list[tuple[str, str, str]] = []
+    for pid, info in PROVIDERS.items():
+        name = info.get("name")
+        display_name = name if isinstance(name, str) else pid
+        options.append((pid, display_name, _provider_status_tag(pid)))
+    return options
+
+
+def _resolve_provider_selection(
+    value: str,
+    options: list[tuple[str, str, str]],
+) -> str | None:
+    choice = value.strip().lower()
+    if not choice:
+        return None
+    if choice.isdecimal():
+        index = int(choice) - 1
+        if 0 <= index < len(options):
+            return options[index][0]
+        return None
+    for pid, _, _ in options:
+        if pid.lower() == choice:
+            return pid
+    return None
+
+
+def _handle_provider_command(state: SessionState, raw_command: str) -> None:
+    options = _provider_options()
+    argument = _slash_argument(raw_command)
+    if argument is not None:
+        selected = _resolve_provider_selection(argument, options)
+        if selected is None:
+            display.warn(f"Unknown provider: {argument}")
+            display.hint(
+                "available: " + ", ".join(pid for pid, _, _ in options)
+            )
+            return
+        _set_session_provider(state, selected)
+        return
+
+    display.provider_choices(state.config.provider, options)
+    try:
+        selected = _resolve_provider_selection(
+            display.text_prompt("provider", default=state.config.provider),
+            options,
+        )
+    except (EOFError, KeyboardInterrupt):
+        display.console.print()
+        display.info("provider unchanged")
+        return
+    if selected is None:
+        display.info("provider unchanged")
+        return
+    _set_session_provider(state, selected)
+
+
+def _set_session_provider(state: SessionState, provider: str) -> None:
+    from .auth import PROVIDERS, resolve_api_config
+
+    if provider not in PROVIDERS:
+        display.warn(f"Unknown provider: {provider}")
+        return
+    if provider == state.config.provider:
+        display.info("provider unchanged")
+        return
+
+    resolved = resolve_api_config(provider)
+
+    previous_provider = state.config.provider
+    state.config.provider = resolved.provider
+    state.config.api_key = resolved.api_key
+    state.config.api_base = resolved.api_base
+    state.config.extra_headers = dict(resolved.extra_headers)
+
+    # Pick a model: keep the current one if the new provider lists it;
+    # otherwise fall back to the provider's default.
+    new_models = _provider_models(resolved.provider)
+    if state.config.model not in new_models:
+        if resolved.model:
+            state.config.model = resolved.model
+        elif new_models:
+            state.config.model = new_models[0]
+
+    display.success(f"Provider set to {resolved.provider}")
+    display.hint(f"was {previous_provider}; model now {state.config.model}")
+    if not resolved.api_key:
+        display.warn(
+            f"No credential found for {resolved.provider}. Running in offline mode."
+        )
+        if resolved.provider == "codex":
+            display.hint("run `codex login`, then re-issue /provider codex")
+        else:
+            display.hint("run `rlm-ws auth` to configure a key")
+    elif resolved.source == "codex.chatgpt":
+        display.info("Using Codex ChatGPT credentials (experimental).")
+    elif resolved.source == "codex.api_key":
+        display.info("Using Codex stored API key.")
+    elif resolved.source == "env":
+        display.info("Using credential from environment.")
+    elif resolved.source == "auth.toml":
+        display.info("Using credential from auth.toml.")
 
 
 def _handle_model_command(state: SessionState, raw_command: str) -> None:
@@ -1366,9 +1601,6 @@ def _run_retrieval(state: SessionState, query: RetrievalQuery) -> RetrievalRecor
         display.warn(f"Retrieval error: {e}")
         results = []
 
-    if not results:
-        return RetrievalRecord(query=query, context_text="", results=[])
-
     # Format context.
     context_parts = []
 
@@ -1382,6 +1614,10 @@ def _run_retrieval(state: SessionState, query: RetrievalQuery) -> RetrievalRecor
                 name = atom.text[:50] if atom else ch.short()
                 mastery_lines.append(f"  - {ch.short()} {name}: {level:.0%}")
             context_parts.append("Student mastery:\n" + "\n".join(mastery_lines))
+
+    recent_context = _recent_memory_context(state)
+    if recent_context:
+        context_parts.append(recent_context)
 
     # Retrieved content.
     content_parts = []
@@ -1412,6 +1648,59 @@ def _run_retrieval(state: SessionState, query: RetrievalQuery) -> RetrievalRecor
         context_text="\n\n".join(context_parts),
         results=results,
     )
+
+
+def _recent_memory_context(state: SessionState) -> str:
+    frame_hash = state.ws.get_ref_hash(_recent_memory_ref(state.config.student_id))
+    if frame_hash is None:
+        return ""
+    frame = state.ws.get_frame(frame_hash)
+    if frame is None:
+        return ""
+
+    sections = []
+    contains_edges = [edge for edge in frame.edges if edge.label == "Contains"]
+    for edge in reversed(contains_edges[-RECENT_MEMORY_CONTEXT_LIMIT:]):
+        event = state.ws.get_event(edge.target)
+        if event is None:
+            continue
+        memory_ref = _event_ref_hash(event.outputs, "recent_memory")
+        memory_atom = state.ws.get_atom(memory_ref) if memory_ref else None
+        if memory_atom is None:
+            continue
+        structured = (
+            memory_atom.structured
+            if isinstance(memory_atom.structured, dict)
+            else {}
+        )
+        turn = structured.get("turn")
+        student_preview = str(structured.get("student_preview") or "").strip()
+        tutor_preview = str(structured.get("tutor_preview") or "").strip()
+        if not student_preview and not tutor_preview:
+            student_preview, tutor_preview = _split_recent_memory_text(
+                memory_atom.text
+            )
+        parts = [f"Turn {turn}:" if turn is not None else "Recent turn:"]
+        if student_preview:
+            parts.append(f"  Student: {_bounded_text(student_preview, 240)}")
+        if tutor_preview:
+            parts.append(f"  Tutor: {_bounded_text(tutor_preview, 360)}")
+        sections.append("\n".join(parts))
+
+    if not sections:
+        return ""
+    return "Recent conversation memory:\n" + "\n---\n".join(sections)
+
+
+def _split_recent_memory_text(text: str) -> tuple[str, str]:
+    student = ""
+    tutor = ""
+    if "\n\nTutor:\n" in text:
+        student_part, tutor = text.split("\n\nTutor:\n", 1)
+        student = student_part.removeprefix("Student:\n")
+    else:
+        student = text
+    return student.strip(), tutor.strip()
 
 
 def _retrieve_context(

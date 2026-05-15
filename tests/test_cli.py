@@ -265,6 +265,8 @@ def test_demo_command_creates_inspectable_workspace():
 
 
 def test_session_offline():
+    from rlm_ws.session import _retrieve_context
+
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
         (Path(d) / "course.md").write_text(SAMPLE_COURSE)
@@ -292,16 +294,26 @@ def test_session_offline():
         assert len(ws.events_by_kind("ModelCall")) == 1
         assert len(ws.events_by_kind("RetrievalPerformed")) == 1
         assert len(ws.events_by_kind("StudentModelUpdate")) == 1
-        assert len(ws.events_by_kind("Admin")) == 1
+        admin_events = [ws.get_event(h) for h in ws.events_by_kind("Admin")]
+        turn_evidence_events = [
+            event for event in admin_events if event and "turn-evidence" in event.tags
+        ]
+        recent_memory_events = [
+            event for event in admin_events if event and "recent-memory" in event.tags
+        ]
+        assert len(turn_evidence_events) == 1
+        assert len(recent_memory_events) == 1
         assert len(ws.events_by_kind("SessionStart")) == 1
         assert len(ws.events_by_kind("SessionEnd")) == 1
         assert len(ws.frames_by_kind("CallContext")) == 1
         mastery = dict(ws.student_mastery_map(state.student_model))
         assert mastery[binary_hash] > 0.0
 
-        evidence_event = ws.get_event(ws.events_by_kind("Admin")[0])
-        assert evidence_event is not None
-        assert "turn-evidence" in evidence_event.tags
+        recent_ref = ws.get_ref_hash("student/test-student/memory/recent")
+        assert recent_ref is not None
+        recent_frame = ws.get_frame(recent_ref)
+        assert recent_frame is not None
+        assert len(recent_frame.edges) == 1
 
         model_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
         assert model_call is not None
@@ -318,6 +330,12 @@ def test_session_offline():
         edge_labels = {edge.label for edge in context_frame.edges}
         assert "ReceivedInput" in edge_labels
         assert "UsedScope" in edge_labels
+
+        next_state = start_session(ws, config)
+        context, _results = _retrieve_context(next_state, "What did we just discuss?")
+        assert "Recent conversation memory" in context
+        assert "Explain binary search" in context
+        end_session(next_state)
 
         print("  PASS: test_session_offline")
 
@@ -568,7 +586,10 @@ def test_session_subcall_command_records_child_call():
 
         update_events = ws.events_by_kind("StudentModelUpdate")
         assert len(update_events) == 1
-        assert state.last_event == update_events[0]
+        last_event = ws.get_event(state.last_event)
+        assert last_event is not None
+        assert "recent-memory" in last_event.tags
+        assert update_events[0] in last_event.parents
         mastery = dict(ws.student_mastery_map(state.student_model))
         assert abs(mastery[binary_hash] - 0.6) < 1e-9
         assert (

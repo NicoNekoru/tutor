@@ -162,6 +162,34 @@ def model_choices(provider: str, current: str, models: Sequence[str]) -> None:
     _blank()
 
 
+def provider_choices(
+    current: str,
+    providers: Sequence[tuple[str, str, str]],
+) -> None:
+    """Render the provider switcher.
+
+    Each ``providers`` entry is ``(id, name, status)``. ``status`` is a
+    short tag — e.g. ``ready``, ``offline``, ``chatgpt`` — shown dim
+    next to the name. The active provider gets a bullet.
+    """
+    table = _bare_table("providers")
+    table.add_column("#", justify="right", style=C.dim)
+    table.add_column("id", style=C.accent, no_wrap=True)
+    table.add_column("name")
+    table.add_column("", style=C.dim)
+    for index, (pid, name, status) in enumerate(providers, start=1):
+        active = "•" if pid == current else " "
+        label = f"[bold {C.accent}]{name}[/]" if pid == current else name
+        table.add_row(str(index), pid, f"{active} {label}", status)
+
+    _blank()
+    _print(f"[{C.dim}]active[/]  [{C.accent}]{current}[/]")
+    if providers:
+        console.print(Padding(table, (0, 0, 0, MARGIN)))
+    _print(f"[{C.dim}]Enter a number or a provider id.[/]")
+    _blank()
+
+
 # Prompt: slash-command completion + readline editing.
 
 class _SlashCompleter(Completer):
@@ -231,6 +259,19 @@ def _chevron_prompt() -> FormattedText:
     ])
 
 
+def _continuation(
+    width: int,
+    line_number: int,
+    is_soft_wrap: int,
+) -> FormattedText:
+    """Indent wrapped input lines under the chevron's content column.
+
+    prompt_toolkit types ``is_soft_wrap`` as ``int`` even though it's
+    used as a boolean at runtime — preserved here to match the stub.
+    """
+    return FormattedText([("class:prompt-margin", " " * width)])
+
+
 def student_input_prompt(
     *,
     commands: Iterable[tuple[str, str]] = (),
@@ -240,13 +281,18 @@ def student_input_prompt(
 
     Uses prompt_toolkit for arrow-key navigation, word-wise delete
     (ctrl/option-backspace), and a Codex/Claude-style slash-command
-    popup that appears as the student types ``/``.
+    popup that appears as the student types ``/``. Soft-wrapped lines
+    align with the body column (right of the chevron).
     """
     if hint_text:
         _print(f"[{C.dim}]{hint_text}[/]")
     cmds: tuple[tuple[str, str], ...] = tuple(commands)
     session = _get_prompt_session(cmds)
-    return session.prompt(_chevron_prompt()).rstrip()
+    return session.prompt(
+        _chevron_prompt(),
+        prompt_continuation=_continuation,
+        wrap_lines=True,
+    ).rstrip()
 
 
 def text_prompt(label: str, *, default: str = "") -> str:
@@ -255,7 +301,12 @@ def text_prompt(label: str, *, default: str = "") -> str:
         ("class:prompt-margin", INDENT),
         ("class:prompt-chevron", f"{label}  "),
     ])
-    return session.prompt(prompt, default=default).strip()
+    return session.prompt(
+        prompt,
+        default=default,
+        prompt_continuation=_continuation,
+        wrap_lines=True,
+    ).strip()
 
 
 def student_says(text: str) -> None:

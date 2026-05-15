@@ -409,7 +409,9 @@ def test_turn_evidence_updates_change_future_retrieval():
             after_scores[data["concepts"]["binary"]]
             > after_scores[data["concepts"]["linked"]]
         )
-        assert len(ws.events_by_kind("Admin")) == 4
+        admin_events = [ws.get_event(h) for h in ws.events_by_kind("Admin")]
+        assert len([e for e in admin_events if e and "turn-evidence" in e.tags]) == 4
+        assert len([e for e in admin_events if e and "recent-memory" in e.tags]) == 4
         assert len(ws.events_by_kind("StudentModelUpdate")) == 4
 
         print("  PASS: test_turn_evidence_updates_change_future_retrieval")
