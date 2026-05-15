@@ -564,6 +564,7 @@ def session(
     \b
     In-session commands:
       /mastery  — show current mastery levels
+      /memory   — show recent conversation memory
       /provider — show or switch the active provider
       /model    — show or change the current model
       /judge    — show or change mastery judgment mode

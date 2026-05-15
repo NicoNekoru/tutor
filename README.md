@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 52 Python tests
+pytest -v                    # 53 Python tests
 ```
 
 ### CLI quickstart
@@ -39,7 +39,7 @@ rlm-ws auth
 # Start a tutoring session
 rlm-ws session --student alice
 
-# In-session commands: /mastery, /model, /judge, /tree, /status, /quit
+# In-session commands: /mastery, /memory, /provider, /model, /judge, /tree, /status, /quit
 
 # Other commands
 rlm-ws ingest content/extra-topics.md   # add more course materials
@@ -178,7 +178,7 @@ For future orchestration work, prefer typed tool/function calls or strict JSON c
 
 Retrieval includes graph proximity, mastery-aware ranking, temporal history, prerequisite traversal, interaction history, a rebuildable local sparse text index for semantic-style query matching, and an optional derived embedding-index interface. Hosted embeddings remain optional derived state, not a correctness dependency.
 
-The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, lightweight recent-turn memory, validated typed engine commands, model-judged mastery updates with bounded deltas and heuristic fallback, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls, decoded mastery-judgment evidence, and engine notices. `rlm-ws inspect --timeline STUDENT --concept CONCEPT` reconstructs a per-concept learning timeline from `StudentModelUpdate` events. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
+The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, lightweight recent-turn memory, validated typed engine commands, model-judged mastery updates with bounded deltas and heuristic fallback, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. Every tutor call includes a memory contract that explains the difference between authoritative course materials, structured mastery, and unverified recent conversation memory. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls, decoded mastery-judgment evidence, and engine notices. `rlm-ws inspect --timeline STUDENT --concept CONCEPT` reconstructs a per-concept learning timeline from `StudentModelUpdate` events. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
 
@@ -247,7 +247,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 52 tests across 3 test files
+pytest -v                    # 53 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -286,7 +286,7 @@ tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (19 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (21 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (22 tests)
 ```
 
 ### Lint policy

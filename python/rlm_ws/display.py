@@ -190,6 +190,30 @@ def provider_choices(
     _blank()
 
 
+def recent_memory_display(rows: Sequence[Any]) -> None:
+    table = _bare_table("recent memory")
+    table.add_column("#", justify="right", style=C.dim)
+    table.add_column("turn", justify="right", style=C.dim)
+    table.add_column("event", style=C.accent)
+    table.add_column("student")
+    table.add_column("tutor", style=C.muted)
+
+    if not rows:
+        table.add_row("", "", "", "", "no recent memory yet")
+        _print_block(table)
+        return
+
+    for row in rows:
+        table.add_row(
+            str(row.index),
+            "" if row.turn is None else str(row.turn),
+            row.event_hash.short(),
+            _clip(row.student_preview, 54),
+            _clip(row.tutor_preview, 72),
+        )
+    _print_block(table)
+
+
 # Prompt: slash-command completion + readline editing.
 
 class _SlashCompleter(Completer):

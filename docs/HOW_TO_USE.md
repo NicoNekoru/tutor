@@ -68,6 +68,7 @@ rlm-ws session --student alice
 Useful in-session commands:
 
 - `/mastery` shows current mastery estimates.
+- `/memory` shows the recent conversation memory carried into future turns.
 - `/model` shows or changes the active model for later turns.
 - `/judge` shows or changes mastery update mode: `model` or `heuristic`.
 - `/tree` shows the ingested course structure.
@@ -85,6 +86,11 @@ During each turn, the engine currently:
 - Persists model calls, child calls, engine notices, and turn evidence.
 - Persists a lightweight recent-memory turn under `student/{id}/memory/recent`.
 - Updates mastery from explicit commands, model-judged evidence, or heuristic fallback.
+
+The model is explicitly told how to interpret memory. Course materials are
+authoritative, mastery is structured persistent state, and recent conversation
+memory is durable transcript context that has not yet been promoted into stable
+facts.
 
 Planned:
 

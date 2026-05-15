@@ -11,6 +11,7 @@ from rlm_ws.session import (
     concept_learning_timeline_rows,
     end_session,
     mastery_judgment_trace_rows,
+    recent_memory_rows,
     resolve_concept_reference,
     run_turn,
     session_trace_rows,
@@ -314,6 +315,10 @@ def test_session_offline():
         recent_frame = ws.get_frame(recent_ref)
         assert recent_frame is not None
         assert len(recent_frame.edges) == 1
+        memory_rows = recent_memory_rows(ws, "test-student")
+        assert len(memory_rows) == 1
+        assert memory_rows[0].turn == 1
+        assert "Explain binary search" in memory_rows[0].student_preview
 
         model_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
         assert model_call is not None
@@ -358,6 +363,45 @@ def test_session_retrieval_integration():
         end_session(state)
 
         print("  PASS: test_session_retrieval_integration")
+
+
+def test_session_prompt_includes_memory_contract():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        state = start_session(
+            ws,
+            SessionConfig(student_id="memory-contract-test", api_key=""),
+        )
+        systems = []
+        old_call_model = session_mod._call_model
+
+        def fake_call_model(_fake_state, system):
+            systems.append(system)
+            return "Tutor response."
+
+        try:
+            session_mod._call_model = fake_call_model
+            run_turn(state, "Explain binary search")
+            run_turn(state, "What did we just discuss?")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert len(systems) == 2
+        assert "## Memory Contract" in systems[0]
+        assert "Course materials are the authoritative source" in systems[0]
+        assert "no command for arbitrary long-term facts yet" in systems[0]
+        assert "## Engine Command Protocol" in systems[0]
+        assert "Recent conversation memory" in systems[1]
+        assert "Explain binary search" in systems[1]
+
+        end_session(state)
+
+        print("  PASS: test_session_prompt_includes_memory_contract")
 
 
 def test_workspace_toml_system_prompt():
@@ -1153,6 +1197,7 @@ if __name__ == "__main__":
     test_demo_command_creates_inspectable_workspace()
     test_session_offline()
     test_session_retrieval_integration()
+    test_session_prompt_includes_memory_contract()
     test_workspace_toml_system_prompt()
     test_session_mastery_update_command()
     test_session_subcall_command_records_child_call()
@@ -1163,4 +1208,4 @@ if __name__ == "__main__":
     test_invalid_model_judgment_falls_back_to_heuristic()
     test_provider_adapters_shape_http_requests()
     test_session_model_command_helpers()
-    print("\nAll 21 tests passed!")
+    print("\nAll 22 tests passed!")

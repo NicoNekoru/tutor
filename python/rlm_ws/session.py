@@ -239,6 +239,36 @@ class ConceptTimelineRow:
     fallback: bool
 
 
+@dataclass(frozen=True)
+class RecentMemoryRow:
+    """A lightweight recent-memory turn carried into future retrieval."""
+
+    index: int
+    event_hash: Hash
+    turn: int | None
+    student_preview: str
+    tutor_preview: str
+
+
+MEMORY_CONTRACT = """\
+## Memory Contract
+
+The engine supplies several memory tiers:
+- Course materials are the authoritative source for domain content.
+- Student mastery is structured, persistent student state.
+- Recent conversation memory is durable transcript context from recent turns; use
+  it for continuity, but treat it as unverified and not yet promoted into stable
+  facts.
+- Turn evidence is persisted after the response and may update mastery through
+  the engine.
+
+You may request structured mastery changes only with `mastery_update`. There is
+no command for arbitrary long-term facts yet, so do not claim that a preference,
+fact, or memory has been permanently stored unless it appears in provided
+context or the engine exposes such a command later.
+"""
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
@@ -462,10 +492,7 @@ def run_turn(state: SessionState, user_input: str) -> str:
     state.last_event = retrieval_event
 
     # 4. Build messages.
-    system = state.config.system_prompt
-    if retrieval.context_text:
-        system += f"\n\n## Relevant Context\n\n{retrieval.context_text}"
-    system += f"\n\n{COMMAND_PROTOCOL}"
+    system = _build_session_system_prompt(state, retrieval)
 
     state.messages.append({"role": "user", "content": user_input})
 
@@ -638,6 +665,22 @@ def run_turn(state: SessionState, user_input: str) -> str:
     return response_text
 
 
+def _build_session_system_prompt(
+    state: SessionState,
+    retrieval: RetrievalRecord,
+    *,
+    include_commands: bool = True,
+) -> str:
+    """Compose the tutor system prompt with explicit memory semantics."""
+    system = state.config.system_prompt
+    system += f"\n\n{MEMORY_CONTRACT}"
+    if retrieval.context_text:
+        system += f"\n\n## Relevant Context\n\n{retrieval.context_text}"
+    if include_commands:
+        system += f"\n\n{COMMAND_PROTOCOL}"
+    return system
+
+
 def _write_recent_memory_turn(
     state: SessionState,
     parent_event: Hash,
@@ -724,6 +767,53 @@ def _update_recent_memory_ref(
 
 def _recent_memory_ref(student_id: str) -> str:
     return f"student/{student_id}/memory/recent"
+
+
+def recent_memory_rows(
+    ws: Workspace,
+    student_id: str,
+    *,
+    limit: int = RECENT_MEMORY_CONTEXT_LIMIT,
+) -> list[RecentMemoryRow]:
+    """Return lightweight recent-memory rows for a student, newest first."""
+    frame_hash = ws.get_ref_hash(_recent_memory_ref(student_id))
+    if frame_hash is None:
+        return []
+    frame = ws.get_frame(frame_hash)
+    if frame is None:
+        return []
+
+    rows: list[RecentMemoryRow] = []
+    contains_edges = [edge for edge in frame.edges if edge.label == "Contains"]
+    for edge in reversed(contains_edges[-limit:]):
+        event = ws.get_event(edge.target)
+        if event is None:
+            continue
+        memory_ref = _event_ref_hash(event.outputs, "recent_memory")
+        memory_atom = ws.get_atom(memory_ref) if memory_ref else None
+        if memory_atom is None:
+            continue
+        structured = (
+            memory_atom.structured
+            if isinstance(memory_atom.structured, dict)
+            else {}
+        )
+        student_preview = str(structured.get("student_preview") or "").strip()
+        tutor_preview = str(structured.get("tutor_preview") or "").strip()
+        if not student_preview and not tutor_preview:
+            student_preview, tutor_preview = _split_recent_memory_text(
+                memory_atom.text
+            )
+        rows.append(
+            RecentMemoryRow(
+                index=len(rows) + 1,
+                event_hash=edge.target,
+                turn=_optional_int(structured.get("turn")),
+                student_preview=student_preview,
+                tutor_preview=tutor_preview,
+            )
+        )
+    return rows
 
 
 def session_trace_rows(
@@ -1168,6 +1258,7 @@ def _concept_name(ws: Workspace, concept_hash: Hash | None) -> str:
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "show available commands"),
     ("/mastery", "show current mastery levels"),
+    ("/memory", "show recent conversation memory"),
     ("/provider", "show or switch the active provider"),
     ("/model", "show or change the current model"),
     ("/judge", "show or change mastery judgment mode"),
@@ -1226,6 +1317,12 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.mastery_display(mastery, ws)
                 else:
                     display.warn("No student model loaded")
+                continue
+
+            if cmd == "/memory":
+                display.recent_memory_display(
+                    recent_memory_rows(ws, config.student_id, limit=RECENT_MEMORY_LIMIT)
+                )
                 continue
 
             if cmd == "/provider" or cmd.startswith("/provider "):
@@ -1659,32 +1756,18 @@ def _recent_memory_context(state: SessionState) -> str:
         return ""
 
     sections = []
-    contains_edges = [edge for edge in frame.edges if edge.label == "Contains"]
-    for edge in reversed(contains_edges[-RECENT_MEMORY_CONTEXT_LIMIT:]):
-        event = state.ws.get_event(edge.target)
-        if event is None:
-            continue
-        memory_ref = _event_ref_hash(event.outputs, "recent_memory")
-        memory_atom = state.ws.get_atom(memory_ref) if memory_ref else None
-        if memory_atom is None:
-            continue
-        structured = (
-            memory_atom.structured
-            if isinstance(memory_atom.structured, dict)
-            else {}
-        )
-        turn = structured.get("turn")
-        student_preview = str(structured.get("student_preview") or "").strip()
-        tutor_preview = str(structured.get("tutor_preview") or "").strip()
-        if not student_preview and not tutor_preview:
-            student_preview, tutor_preview = _split_recent_memory_text(
-                memory_atom.text
-            )
-        parts = [f"Turn {turn}:" if turn is not None else "Recent turn:"]
-        if student_preview:
-            parts.append(f"  Student: {_bounded_text(student_preview, 240)}")
-        if tutor_preview:
-            parts.append(f"  Tutor: {_bounded_text(tutor_preview, 360)}")
+    for row in recent_memory_rows(
+        state.ws,
+        state.config.student_id,
+        limit=RECENT_MEMORY_CONTEXT_LIMIT,
+    ):
+        parts = [
+            f"Turn {row.turn}:" if row.turn is not None else "Recent turn:"
+        ]
+        if row.student_preview:
+            parts.append(f"  Student: {_bounded_text(row.student_preview, 240)}")
+        if row.tutor_preview:
+            parts.append(f"  Tutor: {_bounded_text(row.tutor_preview, 360)}")
         sections.append("\n".join(parts))
 
     if not sections:
@@ -2351,11 +2434,11 @@ def _execute_subcall(
         label=f"turn-{state.turn_count}-subcall-{depth}",
     )
 
-    system = state.config.system_prompt
-    if retrieval.context_text:
-        system += f"\n\n## Relevant Context\n\n{retrieval.context_text}"
-    if depth < state.config.max_call_depth:
-        system += f"\n\n{COMMAND_PROTOCOL}"
+    system = _build_session_system_prompt(
+        state,
+        retrieval,
+        include_commands=depth < state.config.max_call_depth,
+    )
 
     model = _subcall_model(state, command, depth)
     sub_state = SessionState(
