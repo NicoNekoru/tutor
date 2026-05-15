@@ -342,6 +342,50 @@ def test_mastery_update_changes_future_retrieval():
         print("  PASS: test_mastery_update_changes_future_retrieval")
 
 
+def test_turn_evidence_updates_change_future_retrieval():
+    from rlm_ws.session import SessionConfig, end_session, run_turn, start_session
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        data = build_course(ws)
+        strategy = MasteryAware()
+
+        before = strategy.retrieve(
+            RetrievalQuery(student_model=data["student_model"]),
+            ws,
+        )
+        before_scores = {c.hash: c.score for c in before}
+        assert (
+            before_scores[data["concepts"]["linked"]]
+            > before_scores[data["concepts"]["binary"]]
+        )
+
+        state = start_session(
+            ws,
+            SessionConfig(student_id="alice", api_key=""),
+        )
+        for _ in range(4):
+            run_turn(state, "I understand linked lists now.")
+        end_session(state)
+
+        mastery = dict(ws.student_mastery_map(state.student_model))
+        assert mastery[data["concepts"]["linked"]] > 0.4
+
+        after = strategy.retrieve(
+            RetrievalQuery(student_model=state.student_model),
+            ws,
+        )
+        after_scores = {c.hash: c.score for c in after}
+        assert (
+            after_scores[data["concepts"]["binary"]]
+            > after_scores[data["concepts"]["linked"]]
+        )
+        assert len(ws.events_by_kind("Admin")) == 4
+        assert len(ws.events_by_kind("StudentModelUpdate")) == 4
+
+        print("  PASS: test_turn_evidence_updates_change_future_retrieval")
+
+
 def test_mastery_aware_no_model():
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
@@ -643,6 +687,7 @@ if __name__ == "__main__":
     test_semantic_similarity_text_query()
     test_mastery_aware()
     test_mastery_update_changes_future_retrieval()
+    test_turn_evidence_updates_change_future_retrieval()
     test_mastery_aware_no_model()
     test_temporal_recency()
     test_prerequisite_chain()
@@ -656,4 +701,4 @@ if __name__ == "__main__":
     test_failing_strategy_doesnt_crash()
     test_empty_query()
     test_scored_candidate_fields()
-    print("\nAll 17 tests passed!")
+    print("\nAll 18 tests passed!")
