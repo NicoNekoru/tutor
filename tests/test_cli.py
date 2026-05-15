@@ -637,6 +637,7 @@ def test_session_subcall_budget_records_engine_notice():
 def test_responses_text_extraction():
     from rlm_ws.session import _extract_responses_text, _parse_model_output
 
+    concept_hash = rlm_ws.Hash.compute(b"concept").to_hex()
     assert _extract_responses_text({"output_text": "hello"}) == "hello"
     assert (
         _extract_responses_text(
@@ -666,7 +667,9 @@ def test_responses_text_extraction():
                 {
                     "type": "function_call",
                     "name": "mastery_update",
-                    "arguments": '{"concept":"abc","level":0.4}',
+                    "arguments": (
+                        '{"concept":"' + concept_hash + '","level":0.4}'
+                    ),
                 },
             ],
         }
@@ -691,7 +694,73 @@ def test_responses_text_extraction():
     assert len(parsed_subcall.commands) == 1
     assert parsed_subcall.commands[0].kind == "subcall"
 
+    parsed_invalid = _parse_model_output(
+        {
+            "id": "resp_invalid",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "mastery_update",
+                    "arguments": '{"concept":"not-a-hash"}',
+                }
+            ],
+        }
+    )
+    assert parsed_invalid.commands == []
+    assert len(parsed_invalid.command_errors) == 1
+    assert "numeric level" in parsed_invalid.command_errors[0].message
+
     print("  PASS: test_responses_text_extraction")
+
+
+def test_command_validation_records_engine_notice():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        state = start_session(
+            ws,
+            SessionConfig(student_id="validation-test", api_key=""),
+        )
+
+        old_call_model = session_mod._call_model
+        try:
+            session_mod._call_model = lambda _state, _system: (
+                "```json\n"
+                "{\n"
+                '  "visible_text": "I will continue without that command.",\n'
+                '  "commands": [\n'
+                "    {\n"
+                '      "kind": "mastery_update",\n'
+                '      "arguments": {"concept": "not-a-hash"}\n'
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```"
+            )
+            response = run_turn(state, "Explain binary search")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "I will continue without that command."
+        root_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
+        assert root_call is not None
+        notice_refs = [
+            ref for ref in root_call.outputs if ref.role == "engine_notice"
+        ]
+        assert len(notice_refs) == 1
+        notice_event = ws.get_event(notice_refs[0].hash)
+        assert notice_event is not None
+        assert "command_validation_failed" in notice_event.tags
+        notice_atom = ws.get_atom(notice_event.outputs[0].hash)
+        assert "valid concept hash" in notice_atom.structured["message"]
+
+        end_session(state)
+
+        print("  PASS: test_command_validation_records_engine_notice")
 
 
 def test_provider_adapters_shape_http_requests():
@@ -849,6 +918,7 @@ if __name__ == "__main__":
     test_session_subcall_command_records_child_call()
     test_session_subcall_budget_records_engine_notice()
     test_responses_text_extraction()
+    test_command_validation_records_engine_notice()
     test_provider_adapters_shape_http_requests()
     test_session_model_command_helpers()
-    print("\nAll 17 tests passed!")
+    print("\nAll 18 tests passed!")

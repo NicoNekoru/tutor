@@ -22,7 +22,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust → installs native module into venv
-pytest -v                    # 47 Python tests
+pytest -v                    # 48 Python tests
 ```
 
 ### CLI quickstart
@@ -169,7 +169,7 @@ For future orchestration work, prefer typed tool/function calls or strict JSON c
 
 Retrieval includes graph proximity, mastery-aware ranking, temporal history, prerequisite traversal, interaction history, and a rebuildable local sparse text index for semantic-style query matching. Hosted embeddings remain optional derived state, not a correctness dependency.
 
-The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, typed `mastery_update` commands, conservative derived mastery updates, budgeted `subcall` child `ModelCall` events, engine notices for refused subcalls, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
+The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, validated typed engine commands, conservative derived mastery updates, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
 
@@ -238,7 +238,7 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install maturin pytest
 maturin develop              # builds Rust + pybridge → installs native module
-pytest -v                    # 47 tests across 3 test files
+pytest -v                    # 48 tests across 3 test files
 ```
 
 **Note:** `uv run` does not work reliably with maturin-backed native extension
@@ -277,7 +277,7 @@ tests/
 ├── integration.rs              ← full tutoring session lifecycle (Rust)
 ├── test_python.py              ← Python bridge tests (12 tests)
 ├── test_retrieval.py           ← retrieval system tests (18 tests)
-└── test_cli.py                 ← templates, ingestion, and session tests (17 tests)
+└── test_cli.py                 ← templates, ingestion, and session tests (18 tests)
 ```
 
 ### Lint policy

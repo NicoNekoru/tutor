@@ -116,11 +116,22 @@ class EngineCommand:
 
 
 @dataclass(frozen=True)
+class CommandError:
+    """Validation error for a model-emitted command."""
+
+    kind: str | None
+    message: str
+    item: Any
+    source_response_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ParsedModelOutput:
     """Visible tutor text plus machine-readable engine commands."""
 
     visible_text: str
     commands: list[EngineCommand] = field(default_factory=list)
+    command_errors: list[CommandError] = field(default_factory=list)
     raw_text: str = ""
 
 
@@ -367,6 +378,11 @@ def run_turn(state: SessionState, user_input: str) -> str:
     latency_ms = int((time.monotonic() - t0) * 1000)
     parsed = _parse_model_output(raw_response)
     response_text = parsed.visible_text
+    command_notices = _write_command_error_notices(
+        state,
+        retrieval_event,
+        parsed.command_errors,
+    )
 
     # 6. Execute bounded child calls requested by the model.
     subcall_batch = _execute_subcalls(
@@ -379,9 +395,17 @@ def run_turn(state: SessionState, user_input: str) -> str:
 
     # 7. Record model output + event.
     output_structured = None
-    if parsed.commands or parsed.raw_text != parsed.visible_text or child_results:
+    engine_notices = command_notices + subcall_batch.notices
+    if (
+        parsed.commands
+        or parsed.command_errors
+        or parsed.raw_text != parsed.visible_text
+        or child_results
+        or engine_notices
+    ):
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
+            "command_errors": [_command_error_to_dict(e) for e in parsed.command_errors],
             "raw_text": parsed.raw_text,
             "child_calls": [
                 {
@@ -396,7 +420,7 @@ def run_turn(state: SessionState, user_input: str) -> str:
                     "kind": n.kind,
                     "message": n.message,
                 }
-                for n in subcall_batch.notices
+                for n in engine_notices
             ],
         }
     output_atom = state.ws.put_atom(
@@ -419,10 +443,7 @@ def run_turn(state: SessionState, user_input: str) -> str:
             ],
             outputs=[EventRef(output_atom, "model_output")]
             + [EventRef(c.event_hash, "child_call") for c in child_results]
-            + [
-                EventRef(n.event_hash, "engine_notice")
-                for n in subcall_batch.notices
-            ],
+            + [EventRef(n.event_hash, "engine_notice") for n in engine_notices],
             trace=CallTrace(
                 call_depth=0,
                 model=state.config.model,
@@ -459,6 +480,8 @@ def run_turn(state: SessionState, user_input: str) -> str:
         model_output=terminal_output,
         response_text=response_text,
         commands=commands_to_apply,
+        command_errors=parsed.command_errors
+        + (continuation.parsed.command_errors if continuation else []),
     )
 
     mutation_events = _apply_engine_commands(
@@ -903,6 +926,7 @@ def _write_turn_evidence(
     model_output: Hash,
     response_text: str,
     commands: list[EngineCommand],
+    command_errors: list[CommandError],
 ) -> TurnEvidenceRecord:
     """Persist rebuildable evidence for turn-level mastery changes."""
     concept_scores = _turn_concept_scores(state, retrieval)
@@ -929,6 +953,9 @@ def _write_turn_evidence(
                     )
                 ],
                 "commands": [_command_to_dict(c) for c in commands],
+                "command_errors": [
+                    _command_error_to_dict(error) for error in command_errors
+                ],
             },
         )
     )
@@ -1102,7 +1129,7 @@ def _parse_model_output(raw: str | dict[str, Any]) -> ParsedModelOutput:
         return ParsedModelOutput(visible_text=raw_text, raw_text=raw_text)
 
     payload, payload_span = parsed
-    commands = _commands_from_payload(payload)
+    commands, command_errors = _commands_from_payload(payload)
     visible_text = ""
     if isinstance(payload, dict):
         visible_text = str(
@@ -1120,6 +1147,7 @@ def _parse_model_output(raw: str | dict[str, Any]) -> ParsedModelOutput:
     return ParsedModelOutput(
         visible_text=visible_text,
         commands=commands,
+        command_errors=command_errors,
         raw_text=raw_text,
     )
 
@@ -1152,6 +1180,7 @@ def _extract_json_command_payload(
 def _parse_responses_payload(data: dict[str, Any]) -> ParsedModelOutput:
     """Parse text and function-call-shaped items from a Responses payload."""
     commands: list[EngineCommand] = []
+    command_errors: list[CommandError] = []
     response_id = data.get("id") if isinstance(data.get("id"), str) else None
 
     for item in data.get("output", []):
@@ -1161,27 +1190,46 @@ def _parse_responses_payload(data: dict[str, Any]) -> ParsedModelOutput:
             continue
         name = item.get("name")
         if not isinstance(name, str):
+            command_errors.append(
+                CommandError(
+                    kind=None,
+                    message="tool call missing command name",
+                    item=item,
+                    source_response_id=response_id,
+                )
+            )
             continue
         arguments = _coerce_command_arguments(item.get("arguments"))
-        commands.append(
-            EngineCommand(
-                kind=name,
-                arguments=arguments,
-                source_response_id=response_id,
-            )
+        command = EngineCommand(
+            kind=name,
+            arguments=arguments,
+            source_response_id=response_id,
         )
+        errors = _validate_command(command)
+        if errors:
+            command_errors.append(
+                CommandError(
+                    kind=name,
+                    message="; ".join(errors),
+                    item=item,
+                    source_response_id=response_id,
+                )
+            )
+            continue
+        commands.append(command)
 
     visible_text = _extract_responses_text(data)
     if not visible_text and not commands:
         visible_text = "_Unexpected API response format: no text output found_"
     return ParsedModelOutput(
         visible_text=visible_text,
-        commands=[c for c in commands if _is_supported_command(c.kind)],
+        commands=commands,
+        command_errors=command_errors,
         raw_text=visible_text,
     )
 
 
-def _commands_from_payload(payload: Any) -> list[EngineCommand]:
+def _commands_from_payload(payload: Any) -> tuple[list[EngineCommand], list[CommandError]]:
     """Normalize strict JSON payloads into EngineCommand objects."""
     command_items: list[Any]
     if isinstance(payload, dict) and isinstance(payload.get("commands"), list):
@@ -1191,23 +1239,64 @@ def _commands_from_payload(payload: Any) -> list[EngineCommand]:
     elif isinstance(payload, list):
         command_items = payload
     else:
-        return []
+        return [], []
 
     commands: list[EngineCommand] = []
+    command_errors: list[CommandError] = []
     for item in command_items:
         if not isinstance(item, dict):
+            command_errors.append(
+                CommandError(
+                    kind=None,
+                    message="command item must be an object",
+                    item=item,
+                )
+            )
             continue
         kind = item.get("kind") or item.get("name")
         if not isinstance(kind, str):
+            command_errors.append(
+                CommandError(
+                    kind=None,
+                    message="command missing kind",
+                    item=item,
+                )
+            )
             continue
         arguments = _coerce_command_arguments(item.get("arguments", {}))
-        if _is_supported_command(kind):
-            commands.append(EngineCommand(kind=kind, arguments=arguments))
-    return commands
+        command = EngineCommand(kind=kind, arguments=arguments)
+        errors = _validate_command(command)
+        if errors:
+            command_errors.append(
+                CommandError(
+                    kind=kind,
+                    message="; ".join(errors),
+                    item=item,
+                )
+            )
+            continue
+        commands.append(command)
+    return commands, command_errors
 
 
 def _is_supported_command(kind: str) -> bool:
     return kind in {"mastery_update", "subcall"}
+
+
+def _validate_command(command: EngineCommand) -> list[str]:
+    if not _is_supported_command(command.kind):
+        return [f"unsupported command kind: {command.kind}"]
+    if command.kind == "mastery_update":
+        errors = []
+        if _command_concept_hash(command) is None:
+            errors.append("mastery_update requires a valid concept hash")
+        if _command_mastery_level(command) is None:
+            errors.append("mastery_update requires a numeric level")
+        return errors
+    if command.kind == "subcall":
+        if not _subcall_prompt(command):
+            return ["subcall requires a non-empty prompt"]
+    return []
 
 
 def _coerce_command_arguments(value: Any) -> dict[str, Any]:
@@ -1232,6 +1321,36 @@ def _command_to_dict(command: EngineCommand) -> dict[str, Any]:
     return data
 
 
+def _command_error_to_dict(error: CommandError) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "kind": error.kind,
+        "message": error.message,
+        "item": error.item,
+    }
+    if error.source_response_id:
+        data["source_response_id"] = error.source_response_id
+    return data
+
+
+def _write_command_error_notices(
+    state: SessionState,
+    parent_event: Hash,
+    errors: list[CommandError],
+) -> list[EngineNotice]:
+    notices = []
+    for error in errors:
+        notices.append(
+            _write_engine_notice(
+                state,
+                parent_event,
+                "command_validation_failed",
+                error.message,
+                details={"command_error": _command_error_to_dict(error)},
+            )
+        )
+    return notices
+
+
 def _write_engine_notice(
     state: SessionState,
     parent_event: Hash,
@@ -1240,6 +1359,7 @@ def _write_engine_notice(
     *,
     command: EngineCommand | None = None,
     depth: int | None = None,
+    details: dict[str, Any] | None = None,
 ) -> EngineNotice:
     structured: dict[str, Any] = {
         "kind": kind,
@@ -1249,6 +1369,8 @@ def _write_engine_notice(
         structured["depth"] = depth
     if command is not None:
         structured["command"] = _command_to_dict(command)
+    if details:
+        structured.update(details)
 
     atom_hash = state.ws.put_atom(
         Atom(
@@ -1402,6 +1524,11 @@ def _execute_subcall(
     raw_response = _call_model(sub_state, system)
     latency_ms = int((time.monotonic() - t0) * 1000)
     parsed = _parse_model_output(raw_response)
+    command_notices = _write_command_error_notices(
+        state,
+        retrieval_event,
+        parsed.command_errors,
+    )
 
     nested_batch = _execute_subcalls(
         state,
@@ -1414,12 +1541,17 @@ def _execute_subcall(
     output_structured = None
     if (
         parsed.commands
+        or parsed.command_errors
         or parsed.raw_text != parsed.visible_text
         or nested_results
+        or command_notices
         or nested_batch.notices
     ):
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
+            "command_errors": [
+                _command_error_to_dict(e) for e in parsed.command_errors
+            ],
             "raw_text": parsed.raw_text,
             "child_calls": [
                 {
@@ -1434,7 +1566,7 @@ def _execute_subcall(
                     "kind": n.kind,
                     "message": n.message,
                 }
-                for n in nested_batch.notices
+                for n in command_notices + nested_batch.notices
             ],
         }
 
@@ -1460,7 +1592,7 @@ def _execute_subcall(
             + [EventRef(c.event_hash, "child_call") for c in nested_results]
             + [
                 EventRef(n.event_hash, "engine_notice")
-                for n in nested_batch.notices
+                for n in command_notices + nested_batch.notices
             ],
             trace=CallTrace(
                 call_depth=depth,
@@ -1571,11 +1703,25 @@ def _continue_parent_call(
     raw_response = _call_model(continuation_state, system)
     latency_ms = int((time.monotonic() - t0) * 1000)
     parsed = _parse_model_output(raw_response)
+    command_notices = _write_command_error_notices(
+        state,
+        parent_call_event,
+        parsed.command_errors,
+    )
 
     output_structured = None
-    if child_results or parsed.commands or parsed.raw_text != parsed.visible_text:
+    if (
+        child_results
+        or parsed.commands
+        or parsed.command_errors
+        or parsed.raw_text != parsed.visible_text
+        or command_notices
+    ):
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
+            "command_errors": [
+                _command_error_to_dict(e) for e in parsed.command_errors
+            ],
             "raw_text": parsed.raw_text,
             "parent_call": parent_call_event.to_hex(),
             "merge_rule": "compose_parent_draft_with_child_outputs",
@@ -1586,6 +1732,14 @@ def _continue_parent_call(
                     "output": c.output_hash.to_hex(),
                 }
                 for c in child_results
+            ],
+            "engine_notices": [
+                {
+                    "event": n.event_hash.to_hex(),
+                    "kind": n.kind,
+                    "message": n.message,
+                }
+                for n in command_notices
             ],
         }
 
@@ -1607,7 +1761,8 @@ def _continue_parent_call(
                 EventRef(parent_output, "parent_draft"),
             ]
             + [EventRef(c.output_hash, "child_output") for c in child_results],
-            outputs=[EventRef(output_atom, "model_output")],
+            outputs=[EventRef(output_atom, "model_output")]
+            + [EventRef(n.event_hash, "engine_notice") for n in command_notices],
             trace=CallTrace(
                 call_depth=0,
                 model=state.config.model,
