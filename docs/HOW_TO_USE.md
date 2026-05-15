@@ -83,6 +83,7 @@ During each turn, the engine currently:
 - Calls the model and validates any engine commands.
 - Executes bounded recursive `subcall` requests.
 - Persists model calls, child calls, engine notices, and turn evidence.
+- Persists a lightweight recent-memory turn under `student/{id}/memory/recent`.
 - Updates mastery from explicit commands, model-judged evidence, or heuristic fallback.
 
 Planned:
@@ -106,6 +107,10 @@ prior level, judged level, bounded applied level, delta, confidence, fallback
 status, and the turn evidence cited by the judge. Timeline inspection shows how
 one concept's mastery changed across turns. Mastery inspection shows the current
 per-concept mastery frame.
+
+Recent-memory turns are intentionally lightweight. They preserve the latest
+student/tutor exchanges for future retrieval, but they are not treated as stable
+structured facts until later extraction/rubric work promotes them.
 
 Planned:
 
@@ -136,6 +141,7 @@ Implemented:
 - Retrieval strategies for graph proximity, mastery, recency, prerequisites, interaction history, sparse text, and optional derived embeddings.
 - Interactive tutoring sessions.
 - Persistent student mastery models.
+- Lightweight recent-turn memory used as future session context.
 - Model-judged mastery with bounded deltas and heuristic fallback.
 - Bounded recursive child model calls.
 - Session trace inspection with decoded mastery-judgment evidence.
