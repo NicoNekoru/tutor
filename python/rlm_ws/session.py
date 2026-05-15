@@ -52,6 +52,7 @@ class SessionConfig:
     model: str = "gpt-5.4-mini"
     api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
+    extra_headers: dict[str, str] = field(default_factory=dict)
     max_context_results: int = 10
     max_call_depth: int = 1
     max_subcalls_per_turn: int = 3
@@ -2514,6 +2515,7 @@ def _call_model(state: SessionState, system: str) -> str | dict[str, Any]:
         api_key=state.config.api_key,
         system=system,
         messages=list(state.messages),
+        extra_headers=dict(state.config.extra_headers),
     )
     adapter = adapter_for(
         state.config.provider,

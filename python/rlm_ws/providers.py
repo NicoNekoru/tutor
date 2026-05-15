@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
 
 from .auth import PROVIDERS
+
+
+def _empty_headers() -> dict[str, str]:
+    return {}
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,7 @@ class ModelRequest:
     system: str
     messages: list[dict[str, Any]]
     max_output_tokens: int = 2048
+    extra_headers: dict[str, str] = field(default_factory=_empty_headers)
 
 
 class ProviderAdapter(Protocol):
@@ -30,6 +35,7 @@ class ProviderAdapter(Protocol):
 
     def call(self, request: ModelRequest) -> str | dict[str, Any]:
         """Call the provider and return the raw model payload."""
+        ...
 
 
 class OfflineAdapter:
@@ -59,7 +65,7 @@ class OpenAIResponsesAdapter:
         try:
             response = httpx.post(
                 f"{request.api_base.rstrip('/')}/responses",
-                headers=_auth_headers(request.api_key),
+                headers=_auth_headers(request.api_key, request.extra_headers),
                 json={
                     "model": request.model,
                     "instructions": request.system,
@@ -88,7 +94,7 @@ class ChatCompletionsAdapter:
         try:
             response = httpx.post(
                 f"{request.api_base.rstrip('/')}/chat/completions",
-                headers=_auth_headers(request.api_key),
+                headers=_auth_headers(request.api_key, request.extra_headers),
                 json={
                     "model": request.model,
                     "messages": [
@@ -121,11 +127,17 @@ def adapter_for(provider: str, api_base: str, api_key: str) -> ProviderAdapter:
     return ChatCompletionsAdapter()
 
 
-def _auth_headers(api_key: str) -> dict[str, str]:
-    return {
+def _auth_headers(
+    api_key: str,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    headers: dict[str, str] = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if extra:
+        headers.update(extra)
+    return headers
 
 
 def _format_http_error(exc: httpx.HTTPStatusError) -> str:

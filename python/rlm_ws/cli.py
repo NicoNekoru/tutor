@@ -50,7 +50,7 @@ def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
 def auth(
     provider: Optional[str] = typer.Argument(
         None,
-        help="Provider to configure: openai, openrouter",
+        help="Provider to configure: codex, openai, openrouter",
     ),
     show: bool = typer.Option(False, "--show", "-s", help="Show saved keys."),
     set_default: Optional[str] = typer.Option(
@@ -68,12 +68,15 @@ def auth(
     \b
     Examples:
       rlm-ws auth                    # guided setup
-      rlm-ws auth openai             # configure OpenAI
-      rlm-ws auth --show             # show saved keys
-      rlm-ws auth --default openrouter   # set default provider
+      rlm-ws auth codex              # reuse `codex login` credentials
+      rlm-ws auth openai             # configure OpenAI with a typed key
+      rlm-ws auth --show             # show saved keys + codex status
+      rlm-ws auth --default codex    # set default provider
     """
     from .auth import (
         PROVIDERS,
+        codex_status,
+        is_managed,
         load_auth,
         set_api_key,
         set_default_provider,
@@ -96,15 +99,31 @@ def auth(
         from .auth import DEFAULT_PROVIDER
 
         default = auth_data.get("default", {}).get("provider", DEFAULT_PROVIDER)
-        if not keys:
-            display.info("No keys saved. Run 'rlm-ws auth' to configure.")
-            display.info(f"Config file: {_auth_path()}")
-            return
         display.console.print()
-        for prov, key in keys.items():
-            masked = key[:8] + "..." + key[-4:] if len(key) > 16 else "***"
-            marker = " [green](default)[/green]" if prov == default else ""
-            display.console.print(f"  {prov}: {masked}{marker}")
+        if keys:
+            for prov, key in keys.items():
+                masked = key[:8] + "..." + key[-4:] if len(key) > 16 else "***"
+                marker = " [green](default)[/green]" if prov == default else ""
+                display.console.print(f"  {prov}: {masked}{marker}")
+        else:
+            display.info("No rlm-ws keys saved.")
+
+        cx = codex_status()
+        display.console.print()
+        codex_marker = " [green](default)[/green]" if default == "codex" else ""
+        if cx["found"]:
+            if cx["has_api_key"]:
+                kind = "api key"
+            elif cx["has_chatgpt"]:
+                kind = f"chatgpt ({cx['account_id'] or 'unknown account'})"
+            else:
+                kind = "no usable credential"
+            display.console.print(f"  codex: {kind}{codex_marker}")
+            display.info(f"  via {cx['path']}")
+        else:
+            display.console.print(f"  codex: not logged in{codex_marker}")
+            display.info(f"  expected at {cx['path']} — run `codex login`")
+
         display.console.print()
         display.info(f"Config file: {_auth_path()}")
         return
@@ -119,7 +138,10 @@ def auth(
         prov_keys = list(PROVIDERS.keys())
         for i, key in enumerate(prov_keys, 1):
             info = PROVIDERS[key]
-            display.console.print(f"  [cyan]{i}[/cyan]  [bold]{info['name']}[/bold]")
+            tag = " [dim](no key needed)[/dim]" if info.get("managed") else ""
+            display.console.print(
+                f"  [cyan]{i}[/cyan]  [bold]{info['name']}[/bold]{tag}"
+            )
         display.console.print()
         choice = Prompt.ask(
             "Select",
@@ -133,6 +155,32 @@ def auth(
         raise typer.Exit(1)
 
     info = PROVIDERS[provider]
+
+    if is_managed(provider):
+        cx = codex_status()
+        display.console.print()
+        if not cx["found"]:
+            display.warn(f"No Codex auth at {cx['path']}.")
+            display.info("Run `codex login` and re-run this command.")
+            return
+        if cx["has_api_key"]:
+            display.success("Found a Codex-stored API key.")
+        elif cx["has_chatgpt"]:
+            account = cx["account_id"] or "unknown account"
+            display.success(f"Found a ChatGPT OAuth token (account {account}).")
+            display.info("Routes through chatgpt.com/backend-api/codex (experimental).")
+        else:
+            display.warn("Codex auth file present but has no usable credential.")
+            return
+
+        auth_data = load_auth()
+        current_default = auth_data.get("default", {}).get("provider", "")
+        if current_default != provider:
+            if Confirm.ask(f"\n  Set {provider} as the default provider?", default=True):
+                set_default_provider(provider)
+                display.success(f"Default provider: {provider}")
+        return
+
     display.console.print()
     display.info(
         f"Get an API key at: [link={info['signup_url']}]{info['signup_url']}[/link]"
@@ -398,7 +446,7 @@ def session(
         None,
         "--provider",
         "-p",
-        help="Provider from auth config: openai, openrouter",
+        help="Provider from auth config: codex, openai, openrouter",
     ),
     mastery_judge: str = typer.Option(
         "model",
@@ -433,23 +481,29 @@ def session(
         )
         raise typer.Exit(1)
 
-    resolved_provider, resolved_key, resolved_base, resolved_model = resolve_api_config(
-        provider
-    )
+    resolved = resolve_api_config(provider)
 
     config = SessionConfig(
         student_id=student,
-        provider=resolved_provider,
-        model=model or resolved_model,
-        api_key=api_key or resolved_key,
-        api_base=api_base or resolved_base,
+        provider=resolved.provider,
+        model=model or resolved.model,
+        api_key=api_key or resolved.api_key,
+        api_base=api_base or resolved.api_base,
+        extra_headers=dict(resolved.extra_headers),
         mastery_judgment=mastery_judge,
         ws_dir=ws_dir,
     )
 
     if not config.api_key:
-        display.warn("No API key configured. Running in offline mode.")
-        display.info("Run 'rlm-ws auth' to configure a provider.")
+        if resolved.provider == "codex":
+            display.warn("Codex is not logged in. Run `codex login` first.")
+        else:
+            display.warn("No API key configured. Running in offline mode.")
+            display.info("Run 'rlm-ws auth' to configure a provider.")
+    elif resolved.source == "codex.chatgpt":
+        display.info("Using Codex ChatGPT credentials (experimental).")
+    elif resolved.source == "codex.api_key":
+        display.info("Using Codex stored API key.")
 
     run_interactive(ws, config)
 
