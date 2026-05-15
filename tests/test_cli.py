@@ -535,6 +535,10 @@ def test_session_subcall_command_records_child_call():
         )
         assert any(ref.role == "parent_draft" for ref in continuation_call.inputs)
         assert any(ref.role == "child_output" for ref in continuation_call.inputs)
+        continuation_output = ws.get_atom(continuation_call.outputs[0].hash)
+        assert continuation_output.structured["merge_rule"] == (
+            "compose_parent_draft_with_child_outputs"
+        )
         assert len(ws.events_by_kind("RetrievalPerformed")) == 2
         assert len(ws.frames_by_kind("CallContext")) == 2
 
@@ -569,6 +573,65 @@ def test_session_subcall_command_records_child_call():
         assert any("child_output" in row.input_roles for row in rows)
 
         print("  PASS: test_session_subcall_command_records_child_call")
+
+
+def test_session_subcall_budget_records_engine_notice():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        config = SessionConfig(
+            student_id="budget-test",
+            api_key="",
+            max_subcalls_per_turn=0,
+        )
+        state = start_session(ws, config)
+
+        old_call_model = session_mod._call_model
+        try:
+            session_mod._call_model = lambda _state, _system: (
+                "```json\n"
+                "{\n"
+                '  "visible_text": "I will answer directly.",\n'
+                '  "commands": [\n'
+                "    {\n"
+                '      "kind": "subcall",\n'
+                '      "arguments": {\n'
+                '        "prompt": "Explain this separately."\n'
+                "      }\n"
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```"
+            )
+            response = run_turn(state, "Explain binary search")
+        finally:
+            session_mod._call_model = old_call_model
+
+        assert response == "I will answer directly."
+        assert len(ws.events_by_kind("ModelCall")) == 1
+        root_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
+        assert root_call is not None
+        notice_refs = [
+            ref for ref in root_call.outputs if ref.role == "engine_notice"
+        ]
+        assert len(notice_refs) == 1
+        notice_event = ws.get_event(notice_refs[0].hash)
+        assert notice_event is not None
+        assert "subcall_budget_exceeded" in notice_event.tags
+        notice_atom = ws.get_atom(notice_event.outputs[0].hash)
+        assert notice_atom.structured["kind"] == "subcall_budget_exceeded"
+        assert not any(ref.role == "child_call" for ref in root_call.outputs)
+
+        end_session(state)
+        session_tip = ws.get_ref_hash("student/budget-test/session/session-1t")
+        rows = session_trace_rows(ws, session_tip)
+        assert any("engine_notice" in row.output_roles for row in rows)
+
+        print("  PASS: test_session_subcall_budget_records_engine_notice")
 
 
 def test_responses_text_extraction():
@@ -784,7 +847,8 @@ if __name__ == "__main__":
     test_workspace_toml_system_prompt()
     test_session_mastery_update_command()
     test_session_subcall_command_records_child_call()
+    test_session_subcall_budget_records_engine_notice()
     test_responses_text_extraction()
     test_provider_adapters_shape_http_requests()
     test_session_model_command_helpers()
-    print("\nAll 16 tests passed!")
+    print("\nAll 17 tests passed!")

@@ -54,6 +54,7 @@ class SessionConfig:
     api_key: str = ""
     max_context_results: int = 10
     max_call_depth: int = 1
+    max_subcalls_per_turn: int = 3
     system_prompt: str = ""
     ws_dir: Path | None = None  # set by CLI; used to load workspace.toml
 
@@ -82,6 +83,7 @@ class SessionState:
     student_model: Hash | None = None
     messages: list[dict] = field(default_factory=list)
     turn_count: int = 0
+    subcalls_used: int = 0
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,24 @@ class SubcallResult:
     event_hash: Hash
     output_hash: Hash
     visible_text: str
+
+
+@dataclass(frozen=True)
+class EngineNotice:
+    """A persisted non-fatal engine notice."""
+
+    event_hash: Hash
+    atom_hash: Hash
+    kind: str
+    message: str
+
+
+@dataclass(frozen=True)
+class SubcallBatch:
+    """Result of executing subcall commands."""
+
+    child_results: list[SubcallResult] = field(default_factory=list)
+    notices: list[EngineNotice] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -296,6 +316,7 @@ def run_turn(state: SessionState, user_input: str) -> str:
     Returns the model's response text.
     """
     state.turn_count += 1
+    state.subcalls_used = 0
 
     # 1. Record student input.
     input_atom = state.ws.put_atom(
@@ -348,12 +369,13 @@ def run_turn(state: SessionState, user_input: str) -> str:
     response_text = parsed.visible_text
 
     # 6. Execute bounded child calls requested by the model.
-    child_results = _execute_subcalls(
+    subcall_batch = _execute_subcalls(
         state,
         parsed.commands,
         parent_event=retrieval_event,
         depth=1,
     )
+    child_results = subcall_batch.child_results
 
     # 7. Record model output + event.
     output_structured = None
@@ -367,6 +389,14 @@ def run_turn(state: SessionState, user_input: str) -> str:
                     "output": c.output_hash.to_hex(),
                 }
                 for c in child_results
+            ],
+            "engine_notices": [
+                {
+                    "event": n.event_hash.to_hex(),
+                    "kind": n.kind,
+                    "message": n.message,
+                }
+                for n in subcall_batch.notices
             ],
         }
     output_atom = state.ws.put_atom(
@@ -388,7 +418,11 @@ def run_turn(state: SessionState, user_input: str) -> str:
                 EventRef(retrieval_event, "retrieval_event"),
             ],
             outputs=[EventRef(output_atom, "model_output")]
-            + [EventRef(c.event_hash, "child_call") for c in child_results],
+            + [EventRef(c.event_hash, "child_call") for c in child_results]
+            + [
+                EventRef(n.event_hash, "engine_notice")
+                for n in subcall_batch.notices
+            ],
             trace=CallTrace(
                 call_depth=0,
                 model=state.config.model,
@@ -478,7 +512,7 @@ def session_trace_rows(
         events.append((event_hash, event))
 
         for output_ref in event.outputs:
-            if output_ref.role == "child_call":
+            if output_ref.role in {"child_call", "engine_notice"}:
                 collect(output_ref.hash)
 
     collect(session_tip)
@@ -1198,19 +1232,88 @@ def _command_to_dict(command: EngineCommand) -> dict[str, Any]:
     return data
 
 
+def _write_engine_notice(
+    state: SessionState,
+    parent_event: Hash,
+    kind: str,
+    message: str,
+    *,
+    command: EngineCommand | None = None,
+    depth: int | None = None,
+) -> EngineNotice:
+    structured: dict[str, Any] = {
+        "kind": kind,
+        "message": message,
+    }
+    if depth is not None:
+        structured["depth"] = depth
+    if command is not None:
+        structured["command"] = _command_to_dict(command)
+
+    atom_hash = state.ws.put_atom(
+        Atom(
+            "Config",
+            f"engine notice: {kind}",
+            tags=["engine-notice"],
+            structured=structured,
+        )
+    )
+    event_hash = state.ws.put_event(
+        Event(
+            "Admin",
+            parents=[parent_event],
+            outputs=[EventRef(atom_hash, "notice")],
+            tags=["engine-notice", kind],
+        )
+    )
+    return EngineNotice(
+        event_hash=event_hash,
+        atom_hash=atom_hash,
+        kind=kind,
+        message=message,
+    )
+
+
 def _execute_subcalls(
     state: SessionState,
     commands: list[EngineCommand],
     parent_event: Hash,
     depth: int,
-) -> list[SubcallResult]:
+) -> SubcallBatch:
     """Execute bounded recursive subcall commands."""
-    if depth > state.config.max_call_depth:
-        return []
-
-    results: list[SubcallResult] = []
+    batch = SubcallBatch()
     for command in commands:
         if command.kind != "subcall":
+            continue
+        if depth > state.config.max_call_depth:
+            batch.notices.append(
+                _write_engine_notice(
+                    state,
+                    parent_event,
+                    "subcall_depth_exceeded",
+                    (
+                        f"subcall depth {depth} exceeds max depth "
+                        f"{state.config.max_call_depth}"
+                    ),
+                    command=command,
+                    depth=depth,
+                )
+            )
+            continue
+        if state.subcalls_used >= state.config.max_subcalls_per_turn:
+            batch.notices.append(
+                _write_engine_notice(
+                    state,
+                    parent_event,
+                    "subcall_budget_exceeded",
+                    (
+                        f"subcall budget {state.config.max_subcalls_per_turn} "
+                        "used for this turn"
+                    ),
+                    command=command,
+                    depth=depth,
+                )
+            )
             continue
         result = _execute_subcall(
             state,
@@ -1219,8 +1322,19 @@ def _execute_subcalls(
             depth=depth,
         )
         if result:
-            results.append(result)
-    return results
+            batch.child_results.append(result)
+        else:
+            batch.notices.append(
+                _write_engine_notice(
+                    state,
+                    parent_event,
+                    "subcall_invalid_request",
+                    "subcall request had no prompt",
+                    command=command,
+                    depth=depth,
+                )
+            )
+    return batch
 
 
 def _execute_subcall(
@@ -1233,13 +1347,20 @@ def _execute_subcall(
     prompt = _subcall_prompt(command)
     if not prompt:
         return None
+    state.subcalls_used += 1
 
     request_atom = state.ws.put_atom(
         Atom(
             "Config",
             f"subcall request depth {depth}",
             tags=["subcall-request"],
-            structured=command.arguments,
+            structured={
+                **command.arguments,
+                "depth": depth,
+                "parent_event": parent_event.to_hex(),
+                "budget_index": state.subcalls_used,
+                "source_response_id": command.source_response_id,
+            },
         )
     )
 
@@ -1282,15 +1403,21 @@ def _execute_subcall(
     latency_ms = int((time.monotonic() - t0) * 1000)
     parsed = _parse_model_output(raw_response)
 
-    nested_results = _execute_subcalls(
+    nested_batch = _execute_subcalls(
         state,
         parsed.commands,
         parent_event=retrieval_event,
         depth=depth + 1,
     )
+    nested_results = nested_batch.child_results
 
     output_structured = None
-    if parsed.commands or parsed.raw_text != parsed.visible_text or nested_results:
+    if (
+        parsed.commands
+        or parsed.raw_text != parsed.visible_text
+        or nested_results
+        or nested_batch.notices
+    ):
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
             "raw_text": parsed.raw_text,
@@ -1300,6 +1427,14 @@ def _execute_subcall(
                     "output": c.output_hash.to_hex(),
                 }
                 for c in nested_results
+            ],
+            "engine_notices": [
+                {
+                    "event": n.event_hash.to_hex(),
+                    "kind": n.kind,
+                    "message": n.message,
+                }
+                for n in nested_batch.notices
             ],
         }
 
@@ -1322,7 +1457,11 @@ def _execute_subcall(
                 EventRef(retrieval_event, "retrieval_event"),
             ],
             outputs=[EventRef(output_atom, "model_output")]
-            + [EventRef(c.event_hash, "child_call") for c in nested_results],
+            + [EventRef(c.event_hash, "child_call") for c in nested_results]
+            + [
+                EventRef(n.event_hash, "engine_notice")
+                for n in nested_batch.notices
+            ],
             trace=CallTrace(
                 call_depth=depth,
                 model=model,
@@ -1434,11 +1573,13 @@ def _continue_parent_call(
     parsed = _parse_model_output(raw_response)
 
     output_structured = None
-    if parsed.commands or parsed.raw_text != parsed.visible_text:
+    if child_results or parsed.commands or parsed.raw_text != parsed.visible_text:
         output_structured = {
             "commands": [_command_to_dict(c) for c in parsed.commands],
             "raw_text": parsed.raw_text,
             "parent_call": parent_call_event.to_hex(),
+            "merge_rule": "compose_parent_draft_with_child_outputs",
+            "child_count": len(child_results),
             "child_calls": [
                 {
                     "event": c.event_hash.to_hex(),
