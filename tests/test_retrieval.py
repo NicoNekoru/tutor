@@ -11,9 +11,12 @@ from rlm_ws.retrieval import (
     RetrievalQuery,
     RetrievalIntent,
     ScoredCandidate,
+    DerivedEmbeddingIndex,
+    HashingEmbeddingProvider,
     RetrievalPolicy,
     GraphProximity,
     SemanticSimilarity,
+    EmbeddingSimilarity,
     MasteryAware,
     TemporalRecency,
     PrerequisiteChain,
@@ -247,6 +250,32 @@ def test_semantic_similarity_text_query():
         assert data["concepts"]["binary"] in default_hashes
 
         print("  PASS: test_semantic_similarity_text_query")
+
+
+def test_derived_embedding_similarity_index():
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        data = build_course(ws)
+        provider = HashingEmbeddingProvider(dimensions=64)
+
+        index = DerivedEmbeddingIndex.from_workspace(ws, provider)
+        assert index.provider_name == provider.name
+        assert len(index.entries) >= 1
+
+        strategy = EmbeddingSimilarity(provider=provider)
+        results = strategy.retrieve(
+            RetrievalQuery(
+                text_query="binary search halves the search space",
+                max_results=5,
+            ),
+            ws,
+        )
+        hashes = {c.hash for c in results}
+
+        assert data["concepts"]["binary"] in hashes
+        assert all(c.source_strategy == "EmbeddingSimilarity" for c in results)
+
+        print("  PASS: test_derived_embedding_similarity_index")
 
 
 def test_mastery_aware():
@@ -685,6 +714,7 @@ if __name__ == "__main__":
     print("Running retrieval system tests...")
     test_graph_proximity()
     test_semantic_similarity_text_query()
+    test_derived_embedding_similarity_index()
     test_mastery_aware()
     test_mastery_update_changes_future_retrieval()
     test_turn_evidence_updates_change_future_retrieval()
@@ -701,4 +731,4 @@ if __name__ == "__main__":
     test_failing_strategy_doesnt_crash()
     test_empty_query()
     test_scored_candidate_fields()
-    print("\nAll 18 tests passed!")
+    print("\nAll 19 tests passed!")

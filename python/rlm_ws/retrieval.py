@@ -12,6 +12,7 @@ policies, strategy composition, and pedagogical logic.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections import Counter
@@ -156,6 +157,102 @@ class SparseTextIndex:
         return scored[:limit]
 
 
+class EmbeddingProvider(Protocol):
+    """Provider for optional derived embedding vectors."""
+
+    @property
+    def name(self) -> str:
+        """Provider name for provenance."""
+        ...
+
+    def embed(self, text: str) -> list[float]:
+        """Return an embedding vector for text."""
+        ...
+
+
+class HashingEmbeddingProvider:
+    """Deterministic local embedding provider for offline derived indexes."""
+
+    name = "HashingEmbeddingProvider"
+
+    def __init__(self, dimensions: int = 64):
+        self.dimensions = dimensions
+
+    def embed(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimensions
+        for token in _tokenize(text):
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            bucket = int.from_bytes(digest[:4], "big") % self.dimensions
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            vector[bucket] += sign
+        return vector
+
+
+@dataclass(frozen=True)
+class DerivedEmbeddingEntry:
+    """A text object represented by a derived embedding vector."""
+
+    hash: Hash
+    kind: str
+    vector: tuple[float, ...]
+    norm: float
+
+
+@dataclass(frozen=True)
+class DerivedEmbeddingIndex:
+    """Optional rebuildable embedding index derived from workspace text."""
+
+    provider_name: str
+    entries: tuple[DerivedEmbeddingEntry, ...]
+
+    @classmethod
+    def from_workspace(
+        cls,
+        ws: Workspace,
+        provider: EmbeddingProvider,
+        target_kinds: list[str] | None = None,
+    ) -> "DerivedEmbeddingIndex":
+        sparse = SparseTextIndex.from_workspace(ws, target_kinds)
+        entries: list[DerivedEmbeddingEntry] = []
+        for entry in sparse.entries:
+            atom = ws.get_atom(entry.hash)
+            if atom is None:
+                continue
+            vector = tuple(provider.embed(atom.text))
+            norm = _vector_norm(vector)
+            if norm == 0.0:
+                continue
+            entries.append(
+                DerivedEmbeddingEntry(
+                    hash=entry.hash,
+                    kind=entry.kind,
+                    vector=vector,
+                    norm=norm,
+                )
+            )
+        return cls(provider_name=provider.name, entries=tuple(entries))
+
+    def search(
+        self,
+        text: str,
+        provider: EmbeddingProvider,
+        limit: int,
+    ) -> list[tuple[DerivedEmbeddingEntry, float]]:
+        query_vector = tuple(provider.embed(text))
+        query_norm = _vector_norm(query_vector)
+        if query_norm == 0.0:
+            return []
+
+        scored: list[tuple[DerivedEmbeddingEntry, float]] = []
+        for entry in self.entries:
+            score = _cosine(query_vector, query_norm, entry.vector, entry.norm)
+            if score <= 0.0:
+                continue
+            scored.append((entry, score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:limit]
+
+
 _TEXT_ATOM_KINDS = [
     "ConceptDefinition",
     "LessonBody",
@@ -207,6 +304,21 @@ def _sparse_vector(text: str) -> tuple[dict[str, float], float]:
     vector = {token: 1.0 + math.log(count) for token, count in counts.items()}
     norm = math.sqrt(sum(weight * weight for weight in vector.values()))
     return vector, norm
+
+
+def _vector_norm(vector: tuple[float, ...]) -> float:
+    return math.sqrt(sum(value * value for value in vector))
+
+
+def _cosine(
+    left: tuple[float, ...],
+    left_norm: float,
+    right: tuple[float, ...],
+    right_norm: float,
+) -> float:
+    if left_norm == 0.0 or right_norm == 0.0 or len(left) != len(right):
+        return 0.0
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
 
 
 def _tokenize(text: str) -> list[str]:
@@ -393,6 +505,54 @@ class SemanticSimilarity:
                     score=min(1.0, score),
                     source_strategy=self.name,
                     explanation=f"text similarity {score:.2f} to query",
+                )
+            )
+        return results
+
+
+class EmbeddingSimilarity:
+    """Score text objects with an optional derived embedding provider."""
+
+    name = "EmbeddingSimilarity"
+
+    def __init__(
+        self,
+        provider: EmbeddingProvider | None = None,
+        min_score: float = 0.08,
+    ):
+        self.provider = provider
+        self.min_score = min_score
+
+    def retrieve(
+        self,
+        query: RetrievalQuery,
+        ws: Workspace,
+    ) -> list[ScoredCandidate]:
+        if self.provider is None or not query.text_query:
+            return []
+
+        index = DerivedEmbeddingIndex.from_workspace(
+            ws,
+            self.provider,
+            query.target_kinds or None,
+        )
+        results: list[ScoredCandidate] = []
+        for entry, score in index.search(
+            query.text_query,
+            self.provider,
+            query.max_results * 2,
+        ):
+            if score < self.min_score:
+                continue
+            results.append(
+                ScoredCandidate(
+                    hash=entry.hash,
+                    score=min(1.0, score),
+                    source_strategy=self.name,
+                    explanation=(
+                        f"embedding similarity {score:.2f} "
+                        f"via {index.provider_name}"
+                    ),
                 )
             )
         return results
