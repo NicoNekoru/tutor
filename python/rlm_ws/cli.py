@@ -555,7 +555,7 @@ def inspect(
         else:
             display.warn(f"No mastery data for student '{mastery}'")
     if sessions:
-        from .session import session_trace_rows
+        from .session import mastery_judgment_trace_rows, session_trace_rows
 
         session_refs = ws.list_refs(f"student/{sessions}/session")
         if session_refs:
@@ -564,6 +564,10 @@ def inspect(
                 display.session_trace_display(
                     ref_name,
                     session_trace_rows(ws, tip_hash),
+                )
+                display.mastery_judgment_trace_display(
+                    ref_name,
+                    mastery_judgment_trace_rows(ws, tip_hash),
                 )
         else:
             display.warn(f"No session refs for student '{sessions}'")

@@ -27,6 +27,8 @@ pytest -v                    # 51 Python tests
 
 ### CLI quickstart
 
+For a fuller user walkthrough, see [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md).
+
 ```bash
 # Initialize a workspace (guided — pick a template, answer identity prompts)
 rlm-ws init my-course
@@ -171,7 +173,7 @@ For future orchestration work, prefer typed tool/function calls or strict JSON c
 
 Retrieval includes graph proximity, mastery-aware ranking, temporal history, prerequisite traversal, interaction history, a rebuildable local sparse text index for semantic-style query matching, and an optional derived embedding-index interface. Hosted embeddings remain optional derived state, not a correctness dependency.
 
-The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, validated typed engine commands, model-judged mastery updates with bounded deltas and heuristic fallback, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls, mastery-judgment calls, and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
+The session loop currently persists retrieval provenance, first-class `CallContext` frames, turn evidence, validated typed engine commands, model-judged mastery updates with bounded deltas and heuristic fallback, budgeted `subcall` child `ModelCall` events, engine notices for refused or invalid commands, and parent continuations that compose child outputs into the visible answer. `rlm-ws inspect --sessions STUDENT` shows the stored event timeline, including recursive child calls, decoded mastery-judgment evidence, and engine notices. The call graph is stored in the workspace; hosted provider traces remain optional derived state.
 
 ### Key invariants
 

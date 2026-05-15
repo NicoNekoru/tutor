@@ -198,6 +198,27 @@ class SessionTraceRow:
     parent_count: int
 
 
+@dataclass(frozen=True)
+class MasteryJudgmentTraceRow:
+    """Human-readable mastery judgment evidence from a session trace."""
+
+    index: int
+    event_hash: Hash
+    turn: int | None
+    model: str
+    concept_hash: Hash | None
+    concept_name: str
+    current_level: float | None
+    judged_level: float | None
+    bounded_level: float | None
+    delta: float | None
+    confidence: float | None
+    status: str
+    evidence: str
+    fallback: bool
+    errors: tuple[str, ...]
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
@@ -588,6 +609,130 @@ def session_trace_rows(
     session_tip: Hash,
 ) -> list[SessionTraceRow]:
     """Return a chronological summary of session events plus child calls."""
+    events = _session_related_events(ws, session_tip)
+
+    rows = []
+    for index, (event_hash, event) in enumerate(events, start=1):
+        depth = event.trace.call_depth if event.kind == "ModelCall" else None
+        rows.append(
+            SessionTraceRow(
+                index=index,
+                hash=event_hash,
+                kind=event.kind,
+                depth=depth,
+                model=event.trace.model or "",
+                input_roles=tuple(ref.role for ref in event.inputs),
+                output_roles=tuple(ref.role for ref in event.outputs),
+                parent_count=len(event.parents),
+            )
+        )
+    return rows
+
+
+def mastery_judgment_trace_rows(
+    ws: Workspace,
+    session_tip: Hash,
+) -> list[MasteryJudgmentTraceRow]:
+    """Return decoded mastery-judgment evidence from a session trace."""
+    rows: list[MasteryJudgmentTraceRow] = []
+    for event_hash, event in _session_related_events(ws, session_tip):
+        if "mastery-judgment" not in event.tags:
+            continue
+
+        output_ref = next(
+            (ref for ref in event.outputs if ref.role == "mastery_judgment"),
+            None,
+        )
+        if output_ref is None:
+            continue
+        output_atom = ws.get_atom(output_ref.hash)
+        structured = (
+            output_atom.structured
+            if output_atom is not None and isinstance(output_atom.structured, dict)
+            else {}
+        )
+        turn = _optional_int(structured.get("turn"))
+        model = event.trace.model or str(structured.get("model") or "")
+        fallback = bool(structured.get("fallback"))
+        errors = tuple(str(error) for error in structured.get("errors") or [])
+        judgments = structured.get("judgments")
+
+        if not isinstance(judgments, list) or not judgments:
+            rows.append(
+                MasteryJudgmentTraceRow(
+                    index=len(rows) + 1,
+                    event_hash=event_hash,
+                    turn=turn,
+                    model=model,
+                    concept_hash=None,
+                    concept_name="",
+                    current_level=None,
+                    judged_level=None,
+                    bounded_level=None,
+                    delta=None,
+                    confidence=None,
+                    status=_mastery_judgment_status({}, fallback, errors),
+                    evidence="",
+                    fallback=fallback,
+                    errors=errors,
+                )
+            )
+            continue
+
+        for judgment in judgments:
+            if not isinstance(judgment, dict):
+                rows.append(
+                    MasteryJudgmentTraceRow(
+                        index=len(rows) + 1,
+                        event_hash=event_hash,
+                        turn=turn,
+                        model=model,
+                        concept_hash=None,
+                        concept_name="",
+                        current_level=None,
+                        judged_level=None,
+                        bounded_level=None,
+                        delta=None,
+                        confidence=None,
+                        status="invalid judgment",
+                        evidence="",
+                        fallback=fallback,
+                        errors=errors,
+                    )
+                )
+                continue
+
+            concept_hash = _optional_hash(judgment.get("concept"))
+            rows.append(
+                MasteryJudgmentTraceRow(
+                    index=len(rows) + 1,
+                    event_hash=event_hash,
+                    turn=turn,
+                    model=model,
+                    concept_hash=concept_hash,
+                    concept_name=_concept_name(ws, concept_hash),
+                    current_level=_optional_float(judgment.get("current_mastery")),
+                    judged_level=_optional_float(judgment.get("level")),
+                    bounded_level=_optional_float(judgment.get("bounded_level")),
+                    delta=_optional_float(judgment.get("delta")),
+                    confidence=_optional_float(judgment.get("confidence")),
+                    status=_mastery_judgment_status(judgment, fallback, errors),
+                    evidence=_bounded_text(
+                        str(judgment.get("evidence") or ""),
+                        140,
+                    ),
+                    fallback=fallback,
+                    errors=errors,
+                )
+            )
+    return rows
+
+
+def _session_related_events(
+    ws: Workspace,
+    session_tip: Hash,
+) -> list[tuple[Hash, Event]]:
+    """Collect parent-chain events plus auxiliary child calls and notices."""
     events: list[tuple[Hash, Event]] = []
     visited: set[Hash] = set()
 
@@ -609,23 +754,57 @@ def session_trace_rows(
                 collect(output_ref.hash)
 
     collect(session_tip)
+    return events
 
-    rows = []
-    for index, (event_hash, event) in enumerate(events, start=1):
-        depth = event.trace.call_depth if event.kind == "ModelCall" else None
-        rows.append(
-            SessionTraceRow(
-                index=index,
-                hash=event_hash,
-                kind=event.kind,
-                depth=depth,
-                model=event.trace.model or "",
-                input_roles=tuple(ref.role for ref in event.inputs),
-                output_roles=tuple(ref.role for ref in event.outputs),
-                parent_count=len(event.parents),
-            )
-        )
-    return rows
+
+def _mastery_judgment_status(
+    judgment: dict[str, Any],
+    fallback: bool,
+    errors: tuple[str, ...],
+) -> str:
+    if judgment.get("accepted"):
+        return "accepted"
+    if judgment.get("error"):
+        return f"invalid: {judgment['error']}"
+    if judgment.get("skip_reason"):
+        return f"skipped: {judgment['skip_reason']}"
+    if errors:
+        return "error -> fallback" if fallback else "error"
+    if fallback:
+        return "fallback"
+    return "skipped"
+
+
+def _optional_hash(value: Any) -> Hash | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return Hash.from_hex(value)
+    except Exception:
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _concept_name(ws: Workspace, concept_hash: Hash | None) -> str:
+    if concept_hash is None:
+        return ""
+    atom = ws.get_atom(concept_hash)
+    if atom is None:
+        return concept_hash.short()
+    return _bounded_text(atom.text, 72)
 
 
 SLASH_COMMANDS: list[tuple[str, str]] = [

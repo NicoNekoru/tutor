@@ -9,6 +9,7 @@ from rlm_ws.ingest import parse_markdown, ingest_file, ingest_directory
 from rlm_ws.session import (
     SessionConfig,
     end_session,
+    mastery_judgment_trace_rows,
     run_turn,
     session_trace_rows,
     start_session,
@@ -844,6 +845,20 @@ def test_model_judged_mastery_update_records_judgment_call():
         assert update_event.parents == [judgment_hash]
 
         end_session(state)
+        session_tip = ws.get_ref_hash("student/judge-test/session/session-1t")
+        assert session_tip is not None
+        rows = mastery_judgment_trace_rows(ws, session_tip)
+        assert len(rows) == 1
+        assert rows[0].event_hash == judgment_hash
+        assert rows[0].concept_hash == binary_hash
+        assert rows[0].status == "accepted"
+        assert rows[0].fallback is False
+        assert abs(rows[0].current_level - 0.0) < 1e-9
+        assert abs(rows[0].judged_level - 0.9) < 1e-9
+        assert abs(rows[0].bounded_level - 0.08) < 1e-9
+        assert abs(rows[0].delta - 0.08) < 1e-9
+        assert abs(rows[0].confidence - 0.92) < 1e-9
+        assert "halving invariant" in rows[0].evidence
 
         print("  PASS: test_model_judged_mastery_update_records_judgment_call")
 
@@ -905,6 +920,13 @@ def test_invalid_model_judgment_falls_back_to_heuristic():
         )
 
         end_session(state)
+        session_tip = ws.get_ref_hash("student/fallback-test/session/session-1t")
+        assert session_tip is not None
+        rows = mastery_judgment_trace_rows(ws, session_tip)
+        assert len(rows) == 1
+        assert rows[0].fallback is True
+        assert rows[0].status == "error -> fallback"
+        assert "strict JSON" in rows[0].errors[0]
 
         print("  PASS: test_invalid_model_judgment_falls_back_to_heuristic")
 

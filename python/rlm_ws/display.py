@@ -351,6 +351,68 @@ def session_trace_display(ref_name: str, rows: Sequence[Any]) -> None:
     _print_block(table)
 
 
+def mastery_judgment_trace_display(ref_name: str, rows: Sequence[Any]) -> None:
+    if not rows:
+        return
+
+    table = _bare_table(f"mastery judgments {DOT} {ref_name}")
+    table.add_column("#", justify="right", style=C.dim)
+    table.add_column("turn", justify="right", style=C.dim)
+    table.add_column("event", style=C.accent)
+    table.add_column("concept")
+    table.add_column("prior", justify="right", style=C.muted)
+    table.add_column("judged", justify="right", style=C.muted)
+    table.add_column("applied", justify="right", style=C.muted)
+    table.add_column("delta", justify="right")
+    table.add_column("conf", justify="right", style=C.muted)
+    table.add_column("status")
+    table.add_column("fallback", justify="center", style=C.muted)
+    table.add_column("evidence", style=C.muted)
+
+    for row in rows:
+        concept = ""
+        if row.concept_hash is not None:
+            concept = f"{row.concept_hash.short()} {row.concept_name}".strip()
+        status = row.status
+        if status == "accepted":
+            status = f"[{C.ok}]accepted[/]"
+        elif "error" in status or status.startswith("invalid"):
+            status = f"[{C.warn}]{status}[/]"
+        table.add_row(
+            str(row.index),
+            "" if row.turn is None else str(row.turn),
+            row.event_hash.short(),
+            _clip(concept, 42),
+            _pct(row.current_level),
+            _pct(row.judged_level),
+            _pct(row.bounded_level),
+            _signed_pct(row.delta),
+            _pct(row.confidence),
+            status,
+            "yes" if row.fallback else "",
+            _clip(row.evidence or "; ".join(row.errors), 60),
+        )
+    _print_block(table)
+
+
+def _pct(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.0%}"
+
+
+def _signed_pct(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:+.0%}"
+
+
+def _clip(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
+
+
 def object_counts_display(atoms: int, frames: int, events: int) -> None:
     table = _bare_table()
     table.add_column("type", style=C.dim)
