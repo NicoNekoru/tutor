@@ -395,6 +395,50 @@ def mastery_judgment_trace_display(ref_name: str, rows: Sequence[Any]) -> None:
     _print_block(table)
 
 
+def concept_timeline_display(
+    student: str,
+    concept_name: str,
+    rows: Sequence[Any],
+) -> None:
+    title = f"learning timeline {DOT} {student}"
+    if concept_name:
+        title += f" {DOT} {_clip(concept_name, 48)}"
+    table = _bare_table(title)
+    table.add_column("#", justify="right", style=C.dim)
+    table.add_column("turn", justify="right", style=C.dim)
+    table.add_column("event", style=C.accent)
+    table.add_column("source", style=C.muted)
+    table.add_column("prior", justify="right", style=C.muted)
+    table.add_column("new", justify="right", style=C.muted)
+    table.add_column("delta", justify="right")
+    table.add_column("conf", justify="right", style=C.muted)
+    table.add_column("judgment", style=C.accent)
+    table.add_column("evidence / reason", style=C.muted)
+
+    if not rows:
+        table.add_row("", "", "", "", "", "", "", "", "", "no mastery updates yet")
+        _print_block(table)
+        return
+
+    for row in rows:
+        evidence = row.evidence or row.reason
+        if row.reason and row.evidence:
+            evidence = f"{row.evidence} | {row.reason}"
+        table.add_row(
+            str(row.index),
+            "" if row.turn is None else str(row.turn),
+            row.event_hash.short(),
+            row.source,
+            _pct(row.prior_level),
+            _pct(row.new_level),
+            _signed_pct(row.delta),
+            _pct(row.confidence),
+            row.judgment_event.short() if row.judgment_event else "",
+            _clip(evidence, 72),
+        )
+    _print_block(table)
+
+
 def _pct(value: float | None) -> str:
     if value is None:
         return ""

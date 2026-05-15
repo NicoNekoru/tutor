@@ -8,8 +8,10 @@ import rlm_ws
 from rlm_ws.ingest import parse_markdown, ingest_file, ingest_directory
 from rlm_ws.session import (
     SessionConfig,
+    concept_learning_timeline_rows,
     end_session,
     mastery_judgment_trace_rows,
+    resolve_concept_reference,
     run_turn,
     session_trace_rows,
     start_session,
@@ -234,6 +236,27 @@ def test_prerequisite_resolution():
         assert sorting[0] in {e.target for e in prereqs}
 
         print("  PASS: test_prerequisite_resolution")
+
+
+def test_demo_command_creates_inspectable_workspace():
+    from rlm_ws.cli import demo
+
+    with tempfile.TemporaryDirectory() as d:
+        demo_dir = Path(d) / "demo"
+        demo(demo_dir)
+
+        ws = rlm_ws.Workspace.open(str(demo_dir))
+        assert ws.get_ref_hash("course/structure") is not None
+        assert ws.get_ref_hash("student/demo/session/session-2t") is not None
+
+        matches = resolve_concept_reference(ws, "binary search")
+        assert len(matches) == 1
+        timeline = concept_learning_timeline_rows(ws, "demo", matches[0][0])
+        assert len(timeline) == 2
+        assert all(row.source == "turn_evidence" for row in timeline)
+        assert timeline[-1].new_level > timeline[0].new_level
+
+        print("  PASS: test_demo_command_creates_inspectable_workspace")
 
 
 # ============================================================================
@@ -841,7 +864,8 @@ def test_model_judged_mastery_update_records_judgment_call():
             "source"
         ] == "model_judgment"
 
-        update_event = ws.get_event(ws.events_by_kind("StudentModelUpdate")[0])
+        update_hash = ws.events_by_kind("StudentModelUpdate")[0]
+        update_event = ws.get_event(update_hash)
         assert update_event.parents == [judgment_hash]
 
         end_session(state)
@@ -859,6 +883,18 @@ def test_model_judged_mastery_update_records_judgment_call():
         assert abs(rows[0].delta - 0.08) < 1e-9
         assert abs(rows[0].confidence - 0.92) < 1e-9
         assert "halving invariant" in rows[0].evidence
+        assert resolve_concept_reference(ws, "binary search") == [
+            (binary_hash, rows[0].concept_name)
+        ]
+        timeline = concept_learning_timeline_rows(ws, "judge-test", binary_hash)
+        assert len(timeline) == 1
+        assert timeline[0].event_hash == update_hash
+        assert timeline[0].judgment_event == judgment_hash
+        assert timeline[0].source == "model_judgment"
+        assert abs(timeline[0].prior_level - 0.0) < 1e-9
+        assert abs(timeline[0].new_level - 0.08) < 1e-9
+        assert abs(timeline[0].delta - 0.08) < 1e-9
+        assert abs(timeline[0].confidence - 0.92) < 1e-9
 
         print("  PASS: test_model_judged_mastery_update_records_judgment_call")
 
@@ -901,8 +937,8 @@ def test_invalid_model_judgment_falls_back_to_heuristic():
         mastery = dict(ws.student_mastery_map(state.student_model))
         assert mastery[binary_hash] > 0.0
 
-        judgment_call = next(
-            ws.get_event(event_hash)
+        judgment_hash, judgment_call = next(
+            (event_hash, ws.get_event(event_hash))
             for event_hash in ws.events_by_kind("ModelCall")
             if "mastery-judgment" in ws.get_event(event_hash).tags
         )
@@ -927,6 +963,11 @@ def test_invalid_model_judgment_falls_back_to_heuristic():
         assert rows[0].fallback is True
         assert rows[0].status == "error -> fallback"
         assert "strict JSON" in rows[0].errors[0]
+        timeline = concept_learning_timeline_rows(ws, "fallback-test", binary_hash)
+        assert len(timeline) == 1
+        assert timeline[0].source == "turn_evidence"
+        assert timeline[0].judgment_event == judgment_hash
+        assert timeline[0].fallback is True
 
         print("  PASS: test_invalid_model_judgment_falls_back_to_heuristic")
 
@@ -1088,6 +1129,7 @@ if __name__ == "__main__":
     test_parse_markdown()
     test_ingest_file()
     test_prerequisite_resolution()
+    test_demo_command_creates_inspectable_workspace()
     test_session_offline()
     test_session_retrieval_integration()
     test_workspace_toml_system_prompt()
@@ -1100,4 +1142,4 @@ if __name__ == "__main__":
     test_invalid_model_judgment_falls_back_to_heuristic()
     test_provider_adapters_shape_http_requests()
     test_session_model_command_helpers()
-    print("\nAll 20 tests passed!")
+    print("\nAll 21 tests passed!")

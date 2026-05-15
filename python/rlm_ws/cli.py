@@ -22,6 +22,28 @@ app = typer.Typer(
 )
 
 
+DEMO_COURSE_MD = """# Binary Search Demo
+
+## Sorted Search
+
+Binary search works on sorted collections by keeping a low and high boundary
+around the part of the collection that may still contain the target.
+
+### Concept: Binary Search
+Binary search compares the target to the middle element. If the target is
+smaller, the upper half can be discarded. If the target is larger, the lower
+half can be discarded. Each step halves the remaining search interval.
+
+### Problem: Find A Number
+Given a sorted list and a target value, decide whether the target appears in the
+list by repeatedly halving the search interval.
+
+### Example: Searching For 7
+In [1, 3, 5, 7, 9], compare 7 to the middle value 5. Since 7 is larger, search
+the right half [7, 9], then compare with 7.
+"""
+
+
 def _resolve_workspace(path: Path | None) -> tuple[Workspace, Path]:
     """Find and open a workspace. Returns (Workspace, ws_dir)."""
     if path:
@@ -403,6 +425,89 @@ def init(
 
 
 # ============================================================================
+# demo
+# ============================================================================
+
+
+@app.command()
+def demo(
+    path: Path = typer.Argument(
+        Path("rlm-demo"),
+        help="Directory to create for the demo workspace.",
+    ),
+    online: bool = typer.Option(
+        False,
+        "--online",
+        help="Use the configured provider instead of offline mode.",
+    ),
+):
+    """Create a minimal inspectable tutoring demo workspace."""
+    demo_dir = path.resolve()
+    if demo_dir.exists() and not demo_dir.is_dir():
+        display.error(f"Demo path exists and is not a directory: {demo_dir}")
+        raise typer.Exit(1)
+    if demo_dir.exists() and any(demo_dir.iterdir()):
+        display.error(f"Demo directory is not empty: {demo_dir}")
+        raise typer.Exit(1)
+
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    content_dir = demo_dir / "content"
+    content_dir.mkdir()
+    course_path = content_dir / "binary-search.md"
+    course_path.write_text(DEMO_COURSE_MD, encoding="utf-8")
+
+    ws = Workspace.init(str(demo_dir))
+    from .ingest import ingest_file
+    from .session import SessionConfig, end_session, run_turn, start_session
+
+    ingest_file(ws, course_path, course_name="Binary Search Demo")
+
+    provider = "openai"
+    model = "gpt-5.4-mini"
+    api_base = "https://api.openai.com/v1"
+    api_key = ""
+    extra_headers: dict[str, str] = {}
+    mastery_judgment = "heuristic"
+    if online:
+        from .auth import resolve_api_config
+
+        resolved = resolve_api_config(None)
+        provider = resolved.provider
+        model = resolved.model
+        api_base = resolved.api_base
+        api_key = resolved.api_key
+        extra_headers = dict(resolved.extra_headers)
+        mastery_judgment = "model" if api_key else "heuristic"
+        if not api_key:
+            display.warn("No configured API key found. Running demo offline.")
+
+    config = SessionConfig(
+        student_id="demo",
+        provider=provider,
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        extra_headers=extra_headers,
+        mastery_judgment=mastery_judgment,
+        ws_dir=demo_dir,
+    )
+    state = start_session(ws, config)
+    for prompt in [
+        "Explain binary search.",
+        "I understand that binary search halves the remaining interval.",
+    ]:
+        display.info(f"demo turn: {prompt}")
+        response = run_turn(state, prompt)
+        display.prof_says(response)
+    end_session(state)
+
+    display.success("Demo workspace ready")
+    display.info(f"cd {demo_dir}")
+    display.info("rlm-ws inspect --sessions demo")
+    display.info("rlm-ws inspect --timeline demo --concept \"binary search\"")
+
+
+# ============================================================================
 # ingest
 # ============================================================================
 
@@ -524,12 +629,22 @@ def inspect(
         "--sessions",
         help="Show persisted session traces for a student.",
     ),
+    timeline: Optional[str] = typer.Option(
+        None,
+        "--timeline",
+        help="Show a per-concept learning timeline for a student.",
+    ),
+    concept: Optional[str] = typer.Option(
+        None,
+        "--concept",
+        help="Concept hash, short hash, or name substring for --timeline.",
+    ),
     counts: bool = typer.Option(False, "--counts", "-c"),
 ):
     """Inspect the workspace state. With no flags, shows a summary."""
     ws, ws_dir = _resolve_workspace(workspace)
 
-    if not any([refs, tree, mastery, sessions, counts]):
+    if not any([refs, tree, mastery, sessions, timeline, counts]):
         refs = tree = counts = True
 
     if counts:
@@ -571,6 +686,29 @@ def inspect(
                 )
         else:
             display.warn(f"No session refs for student '{sessions}'")
+    if timeline:
+        from .session import concept_learning_timeline_rows, resolve_concept_reference
+
+        if not concept:
+            display.warn("--timeline requires --concept")
+            return
+        matches = resolve_concept_reference(ws, concept)
+        if not matches:
+            display.warn(f"No concept matched '{concept}'")
+            return
+        if len(matches) > 1:
+            display.warn(f"Concept reference '{concept}' matched multiple concepts")
+            for concept_hash, concept_name in matches[:8]:
+                display.info(f"{concept_hash.short()}  {concept_name}")
+            if len(matches) > 8:
+                display.info(f"...and {len(matches) - 8} more")
+            return
+        concept_hash, concept_name = matches[0]
+        display.concept_timeline_display(
+            timeline,
+            concept_name,
+            concept_learning_timeline_rows(ws, timeline, concept_hash),
+        )
 
 
 # ============================================================================

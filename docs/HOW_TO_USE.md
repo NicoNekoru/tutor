@@ -7,6 +7,17 @@ the object store, and update a per-student mastery model.
 
 ## 1. Create A Course Workspace
 
+For a local non-network demo, run:
+
+```bash
+rlm-ws demo rlm-demo
+cd rlm-demo
+rlm-ws inspect --sessions demo
+rlm-ws inspect --timeline demo --concept "binary search"
+```
+
+For your own course, run:
+
 ```bash
 rlm-ws init my-course
 cd my-course
@@ -86,17 +97,18 @@ Planned:
 rlm-ws inspect --sessions alice
 rlm-ws inspect --mastery alice
 rlm-ws inspect --tree
+rlm-ws inspect --timeline alice --concept "binary search"
 ```
 
 Today, session inspection shows the persisted event timeline, including model
 calls, child calls, engine notices, and decoded mastery-judgment evidence:
 prior level, judged level, bounded applied level, delta, confidence, fallback
-status, and the turn evidence cited by the judge. Mastery inspection shows the
-current per-concept mastery frame.
+status, and the turn evidence cited by the judge. Timeline inspection shows how
+one concept's mastery changed across turns. Mastery inspection shows the current
+per-concept mastery frame.
 
 Planned:
 
-- (planned) Per-concept learning timelines.
 - (planned) Retrieval explanation views that show why specific material was selected.
 - (planned) Diff-style views between student model versions.
 
@@ -127,11 +139,11 @@ Implemented:
 - Model-judged mastery with bounded deltas and heuristic fallback.
 - Bounded recursive child model calls.
 - Session trace inspection with decoded mastery-judgment evidence.
+- Per-concept learning timelines.
 
 Planned:
 
 - (planned) Full recursive planner/executor semantics.
 - (planned) Native structured command schemas across providers.
 - (planned) Course-specific mastery rubrics.
-- (planned) Per-concept learning timelines.
 - (planned) Robust semantic embedding adapters and rebuild commands.

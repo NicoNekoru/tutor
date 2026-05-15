@@ -219,6 +219,26 @@ class MasteryJudgmentTraceRow:
     errors: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ConceptTimelineRow:
+    """A single mastery change for one concept."""
+
+    index: int
+    event_hash: Hash
+    turn: int | None
+    concept_hash: Hash
+    concept_name: str
+    prior_level: float | None
+    new_level: float | None
+    delta: float | None
+    source: str
+    reason: str
+    evidence: str
+    judgment_event: Hash | None
+    confidence: float | None
+    fallback: bool
+
+
 COMMAND_PROTOCOL = """\
 ## Engine Command Protocol
 
@@ -728,6 +748,118 @@ def mastery_judgment_trace_rows(
     return rows
 
 
+def resolve_concept_reference(
+    ws: Workspace,
+    value: str,
+) -> list[tuple[Hash, str]]:
+    """Resolve a concept by full hash, short hash prefix, or name substring."""
+    query = value.strip()
+    if not query:
+        return []
+
+    concepts = _course_concepts(ws)
+    try:
+        concept_hash = Hash.from_hex(query)
+    except Exception:
+        concept_hash = None
+    if concept_hash is not None:
+        return [
+            (h, name)
+            for h, name in concepts
+            if h == concept_hash
+        ]
+
+    lower = query.lower()
+    exact_short = [
+        (h, name)
+        for h, name in concepts
+        if h.short().lower() == lower or h.to_hex().lower().startswith(lower)
+    ]
+    if exact_short:
+        return exact_short
+
+    exact_name = [(h, name) for h, name in concepts if name.lower() == lower]
+    if exact_name:
+        return exact_name
+
+    return [(h, name) for h, name in concepts if lower in name.lower()]
+
+
+def concept_learning_timeline_rows(
+    ws: Workspace,
+    student_id: str,
+    concept_hash: Hash,
+) -> list[ConceptTimelineRow]:
+    """Reconstruct mastery changes for one concept from student session events."""
+    rows: list[ConceptTimelineRow] = []
+    seen_updates: set[Hash] = set()
+    concept_name = _concept_name(ws, concept_hash)
+
+    for _ref_name, tip_hash in _student_session_refs(ws, student_id):
+        for event_hash, event in _session_related_events(ws, tip_hash):
+            if event_hash in seen_updates or event.kind != "StudentModelUpdate":
+                continue
+            if not any(ref.role == "concept" and ref.hash == concept_hash for ref in event.inputs):
+                continue
+
+            prior_hash = _event_ref_hash(event.inputs, "prior")
+            updated_hash = _event_ref_hash(event.outputs, "updated")
+            prior_frame = ws.get_frame(prior_hash) if prior_hash else None
+            updated_frame = ws.get_frame(updated_hash) if updated_hash else None
+            prior_level = _frame_mastery_level(prior_frame, concept_hash)
+            new_level = _frame_mastery_level(updated_frame, concept_hash)
+            delta = (
+                new_level - prior_level
+                if prior_level is not None and new_level is not None
+                else None
+            )
+
+            turn_evidence_hash = _event_ref_hash(event.inputs, "turn_evidence")
+            evidence = _turn_evidence_summary(ws, turn_evidence_hash, concept_hash)
+            judgment_event, confidence, fallback, judgment_evidence = (
+                _timeline_judgment_context(ws, event, concept_hash)
+            )
+            if judgment_evidence:
+                evidence = judgment_evidence
+
+            rows.append(
+                ConceptTimelineRow(
+                    index=len(rows) + 1,
+                    event_hash=event_hash,
+                    turn=_turn_from_evidence(ws, turn_evidence_hash),
+                    concept_hash=concept_hash,
+                    concept_name=concept_name,
+                    prior_level=prior_level,
+                    new_level=new_level,
+                    delta=delta,
+                    source=_update_source(event, updated_frame),
+                    reason=_update_reason(updated_frame, concept_hash),
+                    evidence=evidence,
+                    judgment_event=judgment_event,
+                    confidence=confidence,
+                    fallback=fallback,
+                )
+            )
+            seen_updates.add(event_hash)
+
+    return rows
+
+
+def _course_concepts(ws: Workspace) -> list[tuple[Hash, str]]:
+    course_hash = ws.get_ref_hash("course/structure")
+    if course_hash is None:
+        return []
+    concepts = []
+    for concept_hash, atom in ws.collect_atoms(course_hash, "ConceptDefinition"):
+        concepts.append((concept_hash, _bounded_text(atom.text, 120)))
+    return concepts
+
+
+def _student_session_refs(ws: Workspace, student_id: str) -> list[tuple[str, Hash]]:
+    refs = ws.list_refs(f"student/{student_id}/session")
+    return sorted(refs, key=lambda item: (item[0].endswith("/current"), item[0]))
+
+
 def _session_related_events(
     ws: Workspace,
     session_tip: Hash,
@@ -755,6 +887,130 @@ def _session_related_events(
 
     collect(session_tip)
     return events
+
+
+def _event_ref_hash(refs: list[EventRef], role: str) -> Hash | None:
+    ref = next((item for item in refs if item.role == role), None)
+    return ref.hash if ref else None
+
+
+def _frame_mastery_level(frame: Frame | None, concept_hash: Hash) -> float | None:
+    if frame is None:
+        return None
+    for edge in frame.edges:
+        if edge.label == "MasteryEstimate" and edge.target == concept_hash:
+            return edge.weight
+    return None
+
+
+def _turn_from_evidence(ws: Workspace, evidence_hash: Hash | None) -> int | None:
+    if evidence_hash is None:
+        return None
+    atom = ws.get_atom(evidence_hash)
+    structured = (
+        atom.structured
+        if atom is not None and isinstance(atom.structured, dict)
+        else {}
+    )
+    return _optional_int(structured.get("turn"))
+
+
+def _turn_evidence_summary(
+    ws: Workspace,
+    evidence_hash: Hash | None,
+    concept_hash: Hash,
+) -> str:
+    if evidence_hash is None:
+        return ""
+    atom = ws.get_atom(evidence_hash)
+    structured = (
+        atom.structured
+        if atom is not None and isinstance(atom.structured, dict)
+        else {}
+    )
+    signal = str(structured.get("signal") or "").strip()
+    score = None
+    for item in structured.get("concept_scores") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("concept") == concept_hash.to_hex():
+            score = _optional_float(item.get("score"))
+            break
+    student_text = ""
+    student_hash = _optional_hash(structured.get("student_message"))
+    if student_hash is not None:
+        student_atom = ws.get_atom(student_hash)
+        if student_atom is not None:
+            student_text = _bounded_text(student_atom.text, 120)
+
+    parts = []
+    if signal:
+        parts.append(signal)
+    if score is not None:
+        parts.append(f"score={score:.2f}")
+    if student_text:
+        parts.append(student_text)
+    return " | ".join(parts)
+
+
+def _timeline_judgment_context(
+    ws: Workspace,
+    update_event: Event,
+    concept_hash: Hash,
+) -> tuple[Hash | None, float | None, bool, str]:
+    parent_hash = update_event.parents[0] if update_event.parents else None
+    if parent_hash is None:
+        return None, None, False, ""
+    parent = ws.get_event(parent_hash)
+    if parent is None or "mastery-judgment" not in parent.tags:
+        return None, None, False, ""
+    output_ref = _event_ref_hash(parent.outputs, "mastery_judgment")
+    output_atom = ws.get_atom(output_ref) if output_ref is not None else None
+    structured = (
+        output_atom.structured
+        if output_atom is not None and isinstance(output_atom.structured, dict)
+        else {}
+    )
+    fallback = bool(structured.get("fallback"))
+    for item in structured.get("judgments") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("concept") != concept_hash.to_hex():
+            continue
+        return (
+            parent_hash,
+            _optional_float(item.get("confidence")),
+            fallback,
+            _bounded_text(str(item.get("evidence") or ""), 140),
+        )
+    return parent_hash, None, fallback, ""
+
+
+def _update_source(event: Event, updated_frame: Frame | None) -> str:
+    if updated_frame is None:
+        return ""
+    parent_hashes = set(event.parents)
+    for edge in updated_frame.edges:
+        if edge.label != "InteractionRecord" or edge.target not in parent_hashes:
+            continue
+        if isinstance(edge.annotation, dict):
+            source = edge.annotation.get("source")
+            if isinstance(source, str):
+                return source
+    return ""
+
+
+def _update_reason(frame: Frame | None, concept_hash: Hash) -> str:
+    if frame is None:
+        return ""
+    for edge in frame.edges:
+        if edge.label != "MasteryEstimate" or edge.target != concept_hash:
+            continue
+        if isinstance(edge.annotation, dict):
+            reason = edge.annotation.get("reason")
+            if isinstance(reason, str):
+                return _bounded_text(reason, 180)
+    return ""
 
 
 def _mastery_judgment_status(
