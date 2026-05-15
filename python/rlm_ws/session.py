@@ -94,6 +94,17 @@ class RetrievalRecord:
 
 
 @dataclass(frozen=True)
+class TurnEvidenceRecord:
+    """Persisted evidence used for turn-level mastery updates."""
+
+    atom_hash: Hash
+    event_hash: Hash
+    concept_scores: dict[Hash, float]
+    signal: str
+    base_delta: float
+
+
+@dataclass(frozen=True)
 class EngineCommand:
     """A typed command emitted by the model for the session engine."""
 
@@ -399,18 +410,45 @@ def run_turn(state: SessionState, user_input: str) -> str:
         )
         response_text = continuation.parsed.visible_text
 
-    # 8. Apply supported state mutations requested through typed commands.
+    # 8. Persist turn evidence, then apply explicit and derived state updates.
     commands_to_apply = list(parsed.commands)
     if continuation:
         commands_to_apply.extend(continuation.parsed.commands)
+    terminal_event = continuation.event_hash if continuation else call_event
+    terminal_output = continuation.output_hash if continuation else output_atom
+    turn_evidence = _write_turn_evidence(
+        state,
+        input_atom=input_atom,
+        retrieval_event=retrieval_event,
+        retrieval=retrieval,
+        parent_event=terminal_event,
+        model_output=terminal_output,
+        response_text=response_text,
+        commands=commands_to_apply,
+    )
+
     mutation_events = _apply_engine_commands(
         state,
         commands_to_apply,
-        parent_event=continuation.event_hash if continuation else call_event,
-        model_output=continuation.output_hash if continuation else output_atom,
+        parent_event=turn_evidence.event_hash,
+        model_output=terminal_output,
+        turn_evidence=turn_evidence.atom_hash,
     )
-    terminal_event = continuation.event_hash if continuation else call_event
-    state.last_event = mutation_events[-1] if mutation_events else terminal_event
+    current_parent = mutation_events[-1] if mutation_events else turn_evidence.event_hash
+    if not _has_mastery_update(commands_to_apply):
+        derived_commands = _derive_mastery_updates(state, turn_evidence)
+        derived_events = _apply_engine_commands(
+            state,
+            derived_commands,
+            parent_event=current_parent,
+            model_output=terminal_output,
+            turn_evidence=turn_evidence.atom_hash,
+        )
+        mutation_events.extend(derived_events)
+        if derived_events:
+            current_parent = derived_events[-1]
+
+    state.last_event = current_parent
     _update_current_session_ref(state)
 
     state.messages.append({"role": "assistant", "content": response_text})
@@ -820,6 +858,146 @@ def _write_retrieval_event(
             tags=["retrieval"],
         )
     )
+
+
+def _write_turn_evidence(
+    state: SessionState,
+    input_atom: Hash,
+    retrieval_event: Hash,
+    retrieval: RetrievalRecord,
+    parent_event: Hash,
+    model_output: Hash,
+    response_text: str,
+    commands: list[EngineCommand],
+) -> TurnEvidenceRecord:
+    """Persist rebuildable evidence for turn-level mastery changes."""
+    concept_scores = _turn_concept_scores(state, retrieval)
+    signal, base_delta = _student_mastery_signal(retrieval.query.text_query or "")
+    evidence_atom = state.ws.put_atom(
+        Atom(
+            "Config",
+            f"turn evidence for turn {state.turn_count}",
+            tags=["turn-evidence"],
+            structured={
+                "turn": state.turn_count,
+                "student_message": input_atom.to_hex(),
+                "retrieval_event": retrieval_event.to_hex(),
+                "model_output": model_output.to_hex(),
+                "response_chars": len(response_text),
+                "signal": signal,
+                "base_delta": base_delta,
+                "concept_scores": [
+                    {"concept": h.to_hex(), "score": score}
+                    for h, score in sorted(
+                        concept_scores.items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )
+                ],
+                "commands": [_command_to_dict(c) for c in commands],
+            },
+        )
+    )
+
+    inputs = [
+        EventRef(input_atom, "student_message"),
+        EventRef(retrieval_event, "retrieval_event"),
+        EventRef(model_output, "model_output"),
+    ]
+    if state.student_model:
+        inputs.append(EventRef(state.student_model, "student_model"))
+
+    evidence_event = state.ws.put_event(
+        Event(
+            "Admin",
+            parents=[parent_event],
+            inputs=inputs,
+            outputs=[EventRef(evidence_atom, "turn_evidence")],
+            tags=["turn-evidence"],
+        )
+    )
+
+    return TurnEvidenceRecord(
+        atom_hash=evidence_atom,
+        event_hash=evidence_event,
+        concept_scores=concept_scores,
+        signal=signal,
+        base_delta=base_delta,
+    )
+
+
+def _turn_concept_scores(
+    state: SessionState,
+    retrieval: RetrievalRecord,
+) -> dict[Hash, float]:
+    """Find concepts with evidence in this turn and their confidence scores."""
+    scores: dict[Hash, float] = {h: 1.0 for h in retrieval.query.focus_concepts}
+    if scores:
+        return scores
+
+    for candidate in retrieval.results[: state.config.max_context_results]:
+        _add_concept_score(state, scores, candidate.hash, candidate.score)
+
+    return scores
+
+
+def _add_concept_score(
+    state: SessionState,
+    scores: dict[Hash, float],
+    candidate_hash: Hash,
+    score: float,
+) -> None:
+    try:
+        atom = state.ws.get_atom(candidate_hash)
+    except TypeError:
+        atom = None
+    if atom is not None:
+        if atom.kind == "ConceptDefinition":
+            scores[candidate_hash] = max(scores.get(candidate_hash, 0.0), score)
+        return
+
+    try:
+        concepts = state.ws.collect_atoms(candidate_hash, "ConceptDefinition")
+    except Exception:
+        return
+    for concept_hash, _atom in concepts:
+        scores[concept_hash] = max(scores.get(concept_hash, 0.0), score * 0.8)
+
+
+def _student_mastery_signal(user_input: str) -> tuple[str, float]:
+    lower = user_input.lower()
+    negative_markers = [
+        "confused",
+        "don't understand",
+        "do not understand",
+        "stuck",
+        "lost",
+        "wrong",
+        "mistake",
+        "hard",
+        "struggling",
+    ]
+    positive_markers = [
+        "i understand",
+        "makes sense",
+        "got it",
+        "solved",
+        "figured out",
+        "correct",
+        "that works",
+    ]
+    practice_markers = ["practice", "quiz", "test", "problem", "exercise"]
+    explanation_markers = ["explain", "what is", "how does", "describe", "why"]
+
+    if any(marker in lower for marker in negative_markers):
+        return "student_confusion", -0.06
+    if any(marker in lower for marker in positive_markers):
+        return "student_self_reported_progress", 0.08
+    if any(marker in lower for marker in practice_markers):
+        return "practice_or_assessment_request", 0.04
+    if any(marker in lower for marker in explanation_markers):
+        return "instructional_exposure", 0.025
+    return "turn_interaction", 0.015
 
 
 def _build_call_context(
@@ -1336,6 +1514,7 @@ def _apply_engine_commands(
     commands: list[EngineCommand],
     parent_event: Hash,
     model_output: Hash,
+    turn_evidence: Hash | None = None,
 ) -> list[Hash]:
     """Apply supported model commands and return mutation event hashes."""
     mutation_events: list[Hash] = []
@@ -1348,6 +1527,7 @@ def _apply_engine_commands(
             command,
             parent_event=current_parent,
             model_output=model_output,
+            turn_evidence=turn_evidence,
         )
         if event_hash:
             mutation_events.append(event_hash)
@@ -1355,11 +1535,54 @@ def _apply_engine_commands(
     return mutation_events
 
 
+def _has_mastery_update(commands: list[EngineCommand]) -> bool:
+    return any(command.kind == "mastery_update" for command in commands)
+
+
+def _derive_mastery_updates(
+    state: SessionState,
+    evidence: TurnEvidenceRecord,
+) -> list[EngineCommand]:
+    """Derive conservative mastery changes from turn evidence."""
+    if state.student_model is None or not evidence.concept_scores:
+        return []
+
+    mastery = dict(state.ws.student_mastery_map(state.student_model))
+    commands: list[EngineCommand] = []
+    for concept_hash, confidence in sorted(
+        evidence.concept_scores.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:3]:
+        old_level = mastery.get(concept_hash, 0.0)
+        scaled_delta = evidence.base_delta * (0.5 + 0.5 * min(1.0, confidence))
+        new_level = max(0.0, min(1.0, old_level + scaled_delta))
+        if abs(new_level - old_level) < 0.005:
+            continue
+        commands.append(
+            EngineCommand(
+                kind="mastery_update",
+                arguments={
+                    "concept": concept_hash.to_hex(),
+                    "level": new_level,
+                    "reason": (
+                        f"derived from {evidence.signal} "
+                        f"(confidence={confidence:.2f}, "
+                        f"delta={new_level - old_level:+.3f})"
+                    ),
+                    "source": "turn_evidence",
+                },
+            )
+        )
+    return commands
+
+
 def _apply_mastery_update(
     state: SessionState,
     command: EngineCommand,
     parent_event: Hash,
     model_output: Hash,
+    turn_evidence: Hash | None = None,
 ) -> Hash | None:
     """Apply a single CAS-backed mastery update command."""
     if state.student_model is None:
@@ -1409,11 +1632,12 @@ def _apply_mastery_update(
             )
         )
 
+    source = str(command.arguments.get("source") or "mastery_update")
     updated_edges.append(
         Edge(
             "InteractionRecord",
             parent_event,
-            annotation={"source": "mastery_update"},
+            annotation={"source": source},
         )
     )
 
@@ -1426,14 +1650,18 @@ def _apply_mastery_update(
         )
     )
 
+    inputs = [
+        EventRef(old_model_hash, "prior"),
+        EventRef(model_output, "model_output"),
+        EventRef(concept_hash, "concept"),
+    ]
+    if turn_evidence:
+        inputs.append(EventRef(turn_evidence, "turn_evidence"))
+
     event = Event(
         "StudentModelUpdate",
         parents=[parent_event],
-        inputs=[
-            EventRef(old_model_hash, "prior"),
-            EventRef(model_output, "model_output"),
-            EventRef(concept_hash, "concept"),
-        ],
+        inputs=inputs,
         outputs=[EventRef(new_model_hash, "updated")],
         tags=["mastery"],
     )

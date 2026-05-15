@@ -244,7 +244,15 @@ def test_session_offline():
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
         (Path(d) / "course.md").write_text(SAMPLE_COURSE)
-        ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+        course_hash = ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+        binary_hash = next(
+            concept_hash
+            for concept_hash, atom in ws.collect_atoms(
+                course_hash,
+                "ConceptDefinition",
+            )
+            if "Binary search" in atom.text
+        )
 
         config = SessionConfig(student_id="test-student", api_key="")
         state = start_session(ws, config)
@@ -259,9 +267,17 @@ def test_session_offline():
 
         assert len(ws.events_by_kind("ModelCall")) == 1
         assert len(ws.events_by_kind("RetrievalPerformed")) == 1
+        assert len(ws.events_by_kind("StudentModelUpdate")) == 1
+        assert len(ws.events_by_kind("Admin")) == 1
         assert len(ws.events_by_kind("SessionStart")) == 1
         assert len(ws.events_by_kind("SessionEnd")) == 1
         assert len(ws.frames_by_kind("CallContext")) == 1
+        mastery = dict(ws.student_mastery_map(state.student_model))
+        assert mastery[binary_hash] > 0.0
+
+        evidence_event = ws.get_event(ws.events_by_kind("Admin")[0])
+        assert evidence_event is not None
+        assert "turn-evidence" in evidence_event.tags
 
         model_call = ws.get_event(ws.events_by_kind("ModelCall")[0])
         assert model_call is not None
@@ -412,6 +428,7 @@ def test_session_mastery_update_command():
         update_event = ws.get_event(ws.events_by_kind("StudentModelUpdate")[0])
         assert update_event is not None
         assert any(ref.role == "model_output" for ref in update_event.inputs)
+        assert any(ref.role == "turn_evidence" for ref in update_event.inputs)
         assert any(ref.role == "updated" for ref in update_event.outputs)
 
         end_session(state)
