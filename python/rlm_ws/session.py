@@ -1258,7 +1258,7 @@ def _concept_name(ws: Workspace, concept_hash: Hash | None) -> str:
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "show available commands"),
     ("/mastery", "show current mastery levels"),
-    ("/memory", "show recent conversation memory"),
+    ("/memory", "show or clear recent conversation memory"),
     ("/provider", "show or switch the active provider"),
     ("/model", "show or change the current model"),
     ("/judge", "show or change mastery judgment mode"),
@@ -1319,10 +1319,8 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
                     display.warn("No student model loaded")
                 continue
 
-            if cmd == "/memory":
-                display.recent_memory_display(
-                    recent_memory_rows(ws, config.student_id, limit=RECENT_MEMORY_LIMIT)
-                )
+            if cmd == "/memory" or cmd.startswith("/memory "):
+                _handle_memory_command(state, stripped)
                 continue
 
             if cmd == "/provider" or cmd.startswith("/provider "):
@@ -1372,6 +1370,66 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
 
     finally:
         end_session(state)
+
+
+def _handle_memory_command(state: SessionState, raw_command: str) -> None:
+    argument = _slash_argument(raw_command)
+    if argument is None:
+        display.recent_memory_display(
+            recent_memory_rows(
+                state.ws,
+                state.config.student_id,
+                limit=RECENT_MEMORY_LIMIT,
+            )
+        )
+        return
+
+    action = argument.strip().lower()
+    if action in {"clear", "delete", "forget"}:
+        event_hash = _clear_recent_memory(state)
+        if event_hash is None:
+            display.info("recent memory already empty")
+            return
+        display.success("Recent memory cleared for future retrieval")
+        display.hint("current in-session chat context remains until the session ends")
+        return
+
+    display.warn(f"Unknown memory action: {argument}")
+    display.hint("use /memory or /memory clear")
+
+
+def _clear_recent_memory(state: SessionState) -> Hash | None:
+    """Clear the carry-forward recent-memory ref and record the action."""
+    ref_name = _recent_memory_ref(state.config.student_id)
+    prior_hash = state.ws.get_ref_hash(ref_name)
+    if prior_hash is None:
+        return None
+
+    clear_atom = state.ws.put_atom(
+        Atom(
+            "Config",
+            f"recent memory cleared for {state.config.student_id}",
+            tags=["recent-memory", "recent-memory-clear"],
+            structured={
+                "student_id": state.config.student_id,
+                "turn": state.turn_count,
+                "prior_recent_memory": prior_hash.to_hex(),
+            },
+        )
+    )
+    event_hash = state.ws.put_event(
+        Event(
+            "Admin",
+            parents=[state.last_event] if state.last_event else [],
+            inputs=[EventRef(prior_hash, "prior_recent_memory")],
+            outputs=[EventRef(clear_atom, "recent_memory_clear")],
+            tags=["recent-memory", "recent-memory-clear"],
+        )
+    )
+    state.ws.delete_ref(ref_name)
+    state.last_event = event_hash
+    _update_current_session_ref(state)
+    return event_hash
 
 
 def _provider_status_tag(provider: str) -> str:

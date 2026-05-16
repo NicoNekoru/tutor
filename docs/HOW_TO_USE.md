@@ -69,6 +69,7 @@ Useful in-session commands:
 
 - `/mastery` shows current mastery estimates.
 - `/memory` shows the recent conversation memory carried into future turns.
+- `/memory clear` clears the carry-forward recent-memory ref for future turns.
 - `/model` shows or changes the active model for later turns.
 - `/judge` shows or changes mastery update mode: `model` or `heuristic`.
 - `/tree` shows the ingested course structure.

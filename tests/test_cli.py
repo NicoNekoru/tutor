@@ -266,7 +266,7 @@ def test_demo_command_creates_inspectable_workspace():
 
 
 def test_session_offline():
-    from rlm_ws.session import _retrieve_context
+    from rlm_ws.session import _clear_recent_memory, _retrieve_context
 
     with tempfile.TemporaryDirectory() as d:
         ws = rlm_ws.Workspace.init(d)
@@ -340,6 +340,17 @@ def test_session_offline():
         context, _results = _retrieve_context(next_state, "What did we just discuss?")
         assert "Recent conversation memory" in context
         assert "Explain binary search" in context
+        clear_event = _clear_recent_memory(next_state)
+        assert clear_event is not None
+        assert ws.get_ref_hash("student/test-student/memory/recent") is None
+        clear = ws.get_event(clear_event)
+        assert clear is not None
+        assert "recent-memory-clear" in clear.tags
+        context_after_clear, _results = _retrieve_context(
+            next_state,
+            "What did we just discuss?",
+        )
+        assert "Recent conversation memory" not in context_after_clear
         end_session(next_state)
 
         print("  PASS: test_session_offline")
