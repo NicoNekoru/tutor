@@ -1293,7 +1293,10 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
     try:
         while True:
             try:
-                user_input = display.student_input_prompt(commands=SLASH_COMMANDS)
+                user_input = display.student_input_prompt(
+                    commands=SLASH_COMMANDS,
+                    status_text=_prompt_status_line(state, course_name),
+                )
             except (EOFError, KeyboardInterrupt):
                 display.console.print()
                 break
@@ -1370,6 +1373,58 @@ def run_interactive(ws: Workspace, config: SessionConfig) -> None:
 
     finally:
         end_session(state)
+
+
+def _prompt_status_line(state: SessionState, course_name: str = "") -> str:
+    """Compact live context shown under the active student input."""
+    course = course_name.strip() or "untitled"
+    provider_model = _provider_model_status(state)
+    parts = [
+        f"course {_bounded_text(course, 28)}",
+        _bounded_text(provider_model, 42),
+        f"turn {state.turn_count + 1}",
+        f"judge {state.config.mastery_judgment}",
+        f"memory {_recent_memory_count(state)}",
+    ]
+    mastery_status = _mastery_focus_status(state)
+    if mastery_status:
+        parts.append(mastery_status)
+    return f" {display.DOT} ".join(parts)
+
+
+def _provider_model_status(state: SessionState) -> str:
+    model = state.config.model or "offline"
+    if state.config.provider:
+        label = f"{state.config.provider} / {model}"
+    else:
+        label = model
+    if not state.config.api_key:
+        label += " offline"
+    return label
+
+
+def _recent_memory_count(state: SessionState) -> int:
+    return len(
+        recent_memory_rows(
+            state.ws,
+            state.config.student_id,
+            limit=RECENT_MEMORY_LIMIT,
+        )
+    )
+
+
+def _mastery_focus_status(state: SessionState) -> str:
+    if state.student_model is None:
+        return ""
+    mastery = state.ws.student_mastery_map(state.student_model)
+    if not mastery:
+        return ""
+
+    avg_level = sum(level for _concept, level in mastery) / len(mastery)
+    focus_hash, focus_level = min(mastery, key=lambda item: item[1])
+    focus_name = _concept_name(state.ws, focus_hash)
+    focus = _bounded_text(focus_name, 28) if focus_name else focus_hash.short()
+    return f"mastery avg {avg_level:.0%}; focus {focus} {focus_level:.0%}"
 
 
 def _handle_memory_command(state: SessionState, raw_command: str) -> None:

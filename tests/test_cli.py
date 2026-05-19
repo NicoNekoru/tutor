@@ -376,6 +376,37 @@ def test_session_retrieval_integration():
         print("  PASS: test_session_retrieval_integration")
 
 
+def test_prompt_status_line_summarizes_session_context():
+    from rlm_ws import session as session_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        ws = rlm_ws.Workspace.init(d)
+        (Path(d) / "course.md").write_text(SAMPLE_COURSE)
+        ingest_file(ws, Path(d) / "course.md", course_name="Algorithms")
+
+        config = SessionConfig(
+            student_id="status-test",
+            provider="openai",
+            model="gpt-test",
+            api_key="",
+            mastery_judgment="heuristic",
+        )
+        state = start_session(ws, config)
+
+        status = session_mod._prompt_status_line(state, "Algorithms")
+        assert "course Algorithms" in status
+        assert "openai / gpt-test offline" in status
+        assert "turn 1" in status
+        assert "judge heuristic" in status
+        assert "memory 0" in status
+        assert "mastery avg 0%" in status
+        assert "focus" in status
+
+        end_session(state)
+
+        print("  PASS: test_prompt_status_line_summarizes_session_context")
+
+
 def test_session_prompt_includes_memory_contract():
     from rlm_ws import session as session_mod
 

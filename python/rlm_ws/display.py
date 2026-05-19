@@ -7,6 +7,7 @@ Layout:
     ──────────────────────────────────────────
 
       ›  how does the chain rule work?
+      course intro to calculus · openai / gpt-5.4-mini · focus chain rule 20%
 
          If y = f(g(x)), then dy/dx = f'(g(x)) · g'(x).
 
@@ -245,8 +246,11 @@ class _SlashCompleter(Completer):
 
 
 _PROMPT_STYLE: Style = Style.from_dict({
-    "prompt-margin": "",
-    "prompt-chevron": "bold ansigreen",
+    "": "bg:#303030 #f2f2f2",
+    "prompt-margin": "bg:#303030",
+    "prompt-chevron": "bg:#303030 bold ansigreen",
+    "bottom-toolbar": "bg:#121212 #8a8a8a",
+    "bottom-toolbar.status": "bg:#121212 #a8a8a8",
     "completion-menu": "bg:#1c1c1c",
     "completion-menu.completion": "bg:#1c1c1c #c8c8c8",
     "completion-menu.completion.current": "bg:#3a3a3a #ffffff bold",
@@ -300,13 +304,15 @@ def student_input_prompt(
     *,
     commands: Iterable[tuple[str, str]] = (),
     hint_text: str = "",
+    status_text: str = "",
 ) -> str:
     """Read a line of student input.
 
     Uses prompt_toolkit for arrow-key navigation, word-wise delete
     (ctrl/option-backspace), and a Codex/Claude-style slash-command
     popup that appears as the student types ``/``. Soft-wrapped lines
-    align with the body column (right of the chevron).
+    align with the body column (right of the chevron). ``status_text``
+    is rendered in the toolbar directly under the active input.
     """
     if hint_text:
         _print(f"[{C.dim}]{hint_text}[/]")
@@ -314,9 +320,17 @@ def student_input_prompt(
     session = _get_prompt_session(cmds)
     return session.prompt(
         _chevron_prompt(),
+        bottom_toolbar=_status_toolbar(status_text) if status_text else None,
         prompt_continuation=_continuation,
         wrap_lines=True,
     ).rstrip()
+
+
+def _status_toolbar(status_text: str) -> FormattedText:
+    return FormattedText([
+        ("class:bottom-toolbar", INDENT),
+        ("class:bottom-toolbar.status", status_text),
+    ])
 
 
 def text_prompt(label: str, *, default: str = "") -> str:
